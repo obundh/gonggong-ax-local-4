@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net10.0-windows7.0": {
+      "ScreenRecorderLib": {
+        "type": "Direct",
+        "requested": "[6.6.0, )",
+        "resolved": "6.6.0",
+        "contentHash": "u4//jvO39tRXRNqg6/1Ky+KWPmxGdBsJOfp0A1tz6jnJosozzUSYPM0eu3LzeHwZYXeBMJBhVTRLJJBM6CVNng=="
+      },
+      "SharpHook": {
+        "type": "Direct",
+        "requested": "[7.1.3, )",
+        "resolved": "7.1.3",
+        "contentHash": "SaQp+F9fh1ut9Hi3V8mYwzEq1DzrJL4zeFfUc6TDACkjvrGEVtbVC5X3JR4A4/YPTZ39imWhe5b3j7gDScSBWQ=="
+      }
+    },
+    "net10.0-windows7.0/win-x64": {
+      "SharpHook": {
+        "type": "Direct",
+        "requested": "[7.1.3, )",
+        "resolved": "7.1.3",
+        "contentHash": "SaQp+F9fh1ut9Hi3V8mYwzEq1DzrJL4zeFfUc6TDACkjvrGEVtbVC5X3JR4A4/YPTZ39imWhe5b3j7gDScSBWQ=="
+      }
+    }
+  }
+}

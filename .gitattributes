@@ -1,0 +1,10 @@
+* text=auto eol=lf
+
+*.cs text
+*.xaml text
+*.csproj text
+*.md text
+*.yml text
+*.json text
+*.mjs text
+*.png binary
