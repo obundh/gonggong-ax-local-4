@@ -94,6 +94,7 @@ public partial class MainWindow : Window
     private bool isVideoReady;
     private bool closeRequested;
     private bool closeAfterSave;
+    private bool isCompletingCloseRequest;
     private bool isProjectLibraryLoading;
     private bool isSwitchingProject;
     private IntPtr macroTargetWindow;
@@ -4216,32 +4217,53 @@ public partial class MainWindow : Window
 
     private async Task FinishCloseRequestAsync()
     {
-        if (!closeRequested || isRecording || isPreparingRecording || isFinalizing)
+        if (
+            !closeRequested
+            || closeAfterSave
+            || isCompletingCloseRequest
+            || isRecording
+            || isPreparingRecording
+            || isFinalizing
+        )
         {
             return;
         }
 
-        var executionTask = macroExecutionTask;
-        if (executionTask is not null && !executionTask.IsCompleted)
+        isCompletingCloseRequest = true;
+        try
         {
-            RecordingStatusText.Text =
-                "실행을 중지하고 현재 입력을 해제한 뒤 종료합니다…";
-            await executionTask;
-        }
+            var executionTask = macroExecutionTask;
+            if (executionTask is not null && !executionTask.IsCompleted)
+            {
+                RecordingStatusText.Text =
+                    "실행을 중지하고 현재 입력을 해제한 뒤 종료합니다…";
+                await executionTask;
+            }
 
-        projectSaveTimer.Stop();
-        var saved = await SaveCurrentProjectAsync();
-        if (!saved)
+            projectSaveTimer.Stop();
+            var saved = await SaveCurrentProjectAsync();
+            if (!saved)
+            {
+                closeRequested = false;
+                SetRecordingUi(false);
+                RecordingStatusText.Text =
+                    "마지막 편집 내용을 저장하지 못해 종료를 취소했습니다.";
+                return;
+            }
+
+            closeAfterSave = true;
+            _ = Dispatcher.BeginInvoke(
+                DispatcherPriority.Normal,
+                new Action(Close)
+            );
+        }
+        finally
         {
-            closeRequested = false;
-            SetRecordingUi(false);
-            RecordingStatusText.Text =
-                "마지막 편집 내용을 저장하지 못해 종료를 취소했습니다.";
-            return;
+            if (!closeAfterSave)
+            {
+                isCompletingCloseRequest = false;
+            }
         }
-
-        closeAfterSave = true;
-        Close();
     }
 
     private void CleanupForClose()
