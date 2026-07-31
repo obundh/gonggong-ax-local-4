@@ -1,23 +1,17 @@
-# Series 4 고양이 안내 카드
+# 공공 AX 업무 매크로 Series 4 — GPT 생성형 만화
 
-최종 카드 5장은 1080×1350 PNG입니다.
+최종 카드 5장은 모두 1254×1254 정사각형 PNG입니다. 삽화와 한글, 기능 카드,
+말풍선을 한 장 전체로 GPT 이미지 생성해 같은 만화형 인포그래픽 문법으로 구성했습니다.
 
-1. `01-cover.png` — 제품 개요
-2. `02-record.png` — 지연 녹화와 업무 시연
-3. `03-events.png` — 영상과 입력 이벤트 연결
-4. `04-library.png` — 날짜별 기록 저장소
-5. `05-safety.png` — 긴급중지와 검토 경계
+1. `01-cover.png` — 화면과 입력 이벤트를 한 타임라인에 기록
+2. `02-record.png` — 시작 지연 후 업무 시연과 동시 수집
+3. `03-events.png` — 영상 위 이벤트 확인·편집과 수동 추가
+4. `04-library.png` — 날짜별 기록 저장소와 다시 열기
+5. `05-safety.png` — 실행 전 검토와 긴급 중지
 
-`source/`의 그림은 이 프로젝트를 위해 새로 생성했으며, 참고 이미지는 포함하지
-않았습니다. 글자가 생성 과정에서 깨지지 않도록 제목과 설명은
-`scripts/build-series4-comic.mjs`가 후처리로 합성합니다.
-
-카드를 다시 만들려면 Node.js와 `sharp`가 필요합니다.
-
-```powershell
-npm install --no-save sharp
-node .\scripts\build-series4-comic.mjs
-```
+`source/`와 `scripts/build-series4-comic.mjs`는 이전 합성 방식의 작업 자료입니다.
+현재 최종 5장은 후처리 합성본이 아니라 GPT가 페이지 전체를 직접 생성한 결과이므로,
+이전 스크립트를 실행하면 현재 이미지와 다른 결과가 만들어집니다.
 
 이미지와 라이선스 범위는
 [`THIRD_PARTY_NOTICES.md`](../../../THIRD_PARTY_NOTICES.md)를 확인하세요.
