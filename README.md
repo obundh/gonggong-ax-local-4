@@ -4,7 +4,7 @@
 
 > 이 저장소는 **소스 코드만 공개하는 source-only 저장소**입니다. 미리 빌드된 EXE, 설치 파일, 서명된 바이너리 또는 정기적인 바이너리 배포를 제공한다고 약속하지 않습니다.
 
-![공공 AX 로컬 시리즈 4 소개 이미지](docs/assets/series4-comic/01-cover.png)
+![공공 AX 로컬 시리즈 4 소개 이미지](docs/assets/series4-comic/v2/01-problem.png)
 
 ## 무엇을 할 수 있나요?
 
