@@ -9,6 +9,10 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
+if ($null -eq ("System.IO.Compression.ZipFile" -as [type])) {
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+}
+
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
 $artifactsRoot = [IO.Path]::GetFullPath((Join-Path $repoRoot "artifacts"))
 $publishDir = Join-Path $artifactsRoot "publish\win-x64"
@@ -208,7 +212,12 @@ $submoduleGitFile = Join-Path $libuiohookDir ".git"
 if (Test-Path -LiteralPath $submoduleGitFile) {
     Remove-Item -LiteralPath $submoduleGitFile -Force
 }
-Invoke-Checked "tar.exe" @("-a", "-c", "-f", $sourceArchive, "-C", (Split-Path -Parent $sourceWorkDir), (Split-Path -Leaf $sourceWorkDir))
+[IO.Compression.ZipFile]::CreateFromDirectory(
+    $sourceWorkDir,
+    $sourceArchive,
+    [IO.Compression.CompressionLevel]::Optimal,
+    $true
+)
 
 Copy-Item -LiteralPath (Join-Path $repoRoot "LICENSE") -Destination (Join-Path $publishDir "LICENSE.txt")
 Copy-Item -LiteralPath (Join-Path $repoRoot "THIRD_PARTY_NOTICES.md") -Destination $publishDir
@@ -356,7 +365,36 @@ $portableFolderName = "GonggongAX-Series4-Portable-x64-v$Version"
 $portableFolder = Join-Path $stagingDir $portableFolderName
 Copy-Item -LiteralPath $publishDir -Destination $portableFolder -Recurse
 $portableArchive = Join-Path $releaseDir "$portableFolderName.zip"
-Invoke-Checked "tar.exe" @("-a", "-c", "-f", $portableArchive, "-C", $stagingDir, $portableFolderName)
+[IO.Compression.ZipFile]::CreateFromDirectory(
+    $portableFolder,
+    $portableArchive,
+    [IO.Compression.CompressionLevel]::Optimal,
+    $true
+)
+$portableZip = [IO.Compression.ZipFile]::OpenRead($portableArchive)
+try {
+    $portableEntryNames = @(
+        $portableZip.Entries |
+            ForEach-Object { $_.FullName.Replace('\', '/') }
+    )
+    $duplicateEntries = @(
+        $portableEntryNames |
+            Group-Object |
+            Where-Object Count -gt 1
+    )
+    if ($duplicateEntries.Count -gt 0) {
+        throw "Portable archive contains duplicate paths."
+    }
+    foreach ($appFileName in @($appExeName, $appDllName, $appDepsName, $runtimeConfigPath.Name)) {
+        $expectedEntry = "$portableFolderName/$appFileName"
+        if ($portableEntryNames -notcontains $expectedEntry) {
+            throw "Portable archive did not preserve the application filename: $expectedEntry"
+        }
+    }
+}
+finally {
+    $portableZip.Dispose()
+}
 
 Invoke-Checked $isccExe @(
     "/Qp",
