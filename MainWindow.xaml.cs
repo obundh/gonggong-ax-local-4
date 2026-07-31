@@ -28,6 +28,9 @@ public partial class MainWindow : Window
     private const uint ModShift = 0x0004;
     private const uint VkF12 = 0x7B;
     private const uint InputMouse = 0;
+    private const uint InputKeyboard = 1;
+    private const uint KeyEventKeyUp = 0x0002;
+    private const uint KeyEventUnicode = 0x0004;
     private const uint MouseEventLeftDown = 0x0002;
     private const uint MouseEventLeftUp = 0x0004;
     private const uint MouseEventRightDown = 0x0008;
@@ -50,6 +53,9 @@ public partial class MainWindow : Window
     private static readonly SolidColorBrush OutsideEventBrush = new(
         Color.FromRgb(240, 68, 56)
     );
+    private static readonly SolidColorBrush ReviewWarningBrush = new(
+        Color.FromRgb(181, 71, 8)
+    );
     private readonly Stopwatch recordingClock = new();
     private readonly DispatcherTimer countdownTimer;
     private readonly DispatcherTimer macroCountdownTimer;
@@ -65,12 +71,14 @@ public partial class MainWindow : Window
     private TaskPoolGlobalHook? globalHook;
     private Recorder? recorder;
     private CancellationTokenSource? macroCancellation;
+    private Task? macroExecutionTask;
     private CancellationTokenSource? recordingPreparationCancellation;
     private CancellationTokenSource? projectLibraryRefreshCancellation;
     private HwndSource? windowSource;
     private string? currentVideoPath;
     private string? pendingVideoPath;
     private string? recordingFailureMessage;
+    private string? macroRunPreparationWarning;
     private bool isRecording;
     private bool isPreparingRecording;
     private bool eventCaptureStarted;
@@ -86,6 +94,7 @@ public partial class MainWindow : Window
     private bool isVideoReady;
     private bool closeRequested;
     private bool closeAfterSave;
+    private bool isCompletingCloseRequest;
     private bool isProjectLibraryLoading;
     private bool isSwitchingProject;
     private IntPtr macroTargetWindow;
@@ -177,7 +186,7 @@ public partial class MainWindow : Window
             await SaveCurrentProjectAsync();
             RecordingStatusText.Text = project.Status == MacroProjectStatus.Completed
                 ? $"최근 매크로를 복원했습니다. {RecordedEvents.Count}개 로그를 불러왔습니다."
-                : $"정상 완료되지 않은 녹화를 복원했습니다. {RecordedEvents.Count}개 로그는 검토용으로만 열었습니다.";
+                : $"정상 완료되지 않은 녹화를 복원했습니다. {RecordedEvents.Count}개 로그를 경고와 함께 불러왔으며 실행할 수 있습니다.";
         }
         catch (FileNotFoundException)
         {
@@ -218,6 +227,7 @@ public partial class MainWindow : Window
                     .ThenBy(item => item.Sequence)
             )
             {
+                MigrateLegacyReviewOnlyQuarantine(recordedEvent);
                 if (recordedEvent.Sequence <= 0)
                 {
                     recordedEvent.Sequence = ++nextEventSequence;
@@ -232,11 +242,7 @@ public partial class MainWindow : Window
                 RecordedEvents.Add(recordedEvent);
             }
 
-            QuarantineUnsafeEvents();
-            if (currentProjectStatus != MacroProjectStatus.Completed)
-            {
-                QuarantineIncompleteProjectEvents();
-            }
+            ApplyEventPolicies();
             UpdateEventLogUi();
             ResetManualEditor();
             if (File.Exists(currentVideoPath))
@@ -1123,9 +1129,9 @@ public partial class MainWindow : Window
             explicitOffset: pending.Offset,
             isQuarantined: quarantine,
             quarantineReason: isDrag
-                ? "드래그는 현재 자동 재생하지 않아 안전을 위해 격리했습니다."
+                ? "드래그 종료 좌표와 지속시간 데이터가 없어 현재 실행기가 재생할 수 없습니다."
                 : returnedToRecorder
-                    ? "녹화 앱으로 돌아오기 위한 클릭으로 판단해 격리했습니다."
+                    ? "매크로 앱 자체를 조작하는 동작이라 실행할 수 없습니다."
                     : null
         );
     }
@@ -1210,9 +1216,8 @@ public partial class MainWindow : Window
             actionKind: MacroActionKind.KeyStroke,
             actionText: keyChord,
             keyCodes: keyCodes,
-            isQuarantined: isNavigationChord,
-            quarantineReason: isNavigationChord
-                ? "녹화 앱 전환에 사용될 수 있는 창 전환 단축키라 격리했습니다."
+            reviewWarningText: isNavigationChord
+                ? "창 전환 키가 포함되어 있습니다. 이후 입력 대상 창을 확인하세요."
                 : null
         );
     }
@@ -1357,7 +1362,8 @@ public partial class MainWindow : Window
         KeyCode[]? modifierKeyCodes = null,
         TimeSpan? explicitOffset = null,
         bool isQuarantined = false,
-        string? quarantineReason = null
+        string? quarantineReason = null,
+        string? reviewWarningText = null
     )
     {
         var offset = explicitOffset ?? recordingClock.Elapsed;
@@ -1393,6 +1399,7 @@ public partial class MainWindow : Window
                     modifierKeyCodes,
                     isQuarantined,
                     quarantineReason,
+                    reviewWarningText,
                     eventCaptureLeft,
                     eventCaptureTop,
                     eventCaptureWidth,
@@ -1417,6 +1424,7 @@ public partial class MainWindow : Window
         KeyCode[]? modifierKeyCodes = null,
         bool isQuarantined = false,
         string? quarantineReason = null,
+        string? reviewWarningText = null,
         int? eventCaptureLeft = null,
         int? eventCaptureTop = null,
         int? eventCaptureWidth = null,
@@ -1437,6 +1445,7 @@ public partial class MainWindow : Window
             ModifierKeyCodes = modifierKeyCodes?.ToArray() ?? [],
             IsQuarantined = isQuarantined,
             QuarantineReason = quarantineReason,
+            ReviewWarningText = reviewWarningText,
             Sequence = ++nextEventSequence,
             ScreenX = screenX,
             ScreenY = screenY,
@@ -1446,6 +1455,7 @@ public partial class MainWindow : Window
             CaptureHeight = eventCaptureHeight ?? captureHeight,
         };
 
+        ApplyEventPolicy(recordedEvent);
         InsertEventChronologically(recordedEvent);
         UpdateEventLogUi();
         EventLogList.ScrollIntoView(recordedEvent);
@@ -1454,6 +1464,7 @@ public partial class MainWindow : Window
 
     private void InsertEventChronologically(RecordedEvent recordedEvent)
     {
+        ClearExecutionResults();
         var insertionIndex = 0;
         while (
             insertionIndex < RecordedEvents.Count
@@ -1516,6 +1527,7 @@ public partial class MainWindow : Window
             return;
         }
 
+        ClearExecutionResults();
         var adjacentEvent = RecordedEvents[targetIndex];
         if (recordedEvent.Offset == adjacentEvent.Offset)
         {
@@ -1588,6 +1600,7 @@ public partial class MainWindow : Window
             return;
         }
 
+        ClearExecutionResults();
         UpdateEventLogUi();
         RenderEventOverlay(RecordedVideo.Position);
         ScheduleProjectSave();
@@ -1595,7 +1608,28 @@ public partial class MainWindow : Window
 
     private void UpdateEventLogUi()
     {
+        ApplyEventPolicies();
         EventCountText.Text = RecordedEvents.Count.ToString();
+        var warningCount = RecordedEvents.Count(
+            recordedEvent => recordedEvent.HasReviewWarning
+        );
+        var blockedCount = RecordedEvents.Count(
+            recordedEvent => recordedEvent.IsQuarantined
+        );
+        var executableWarningCount = RecordedEvents.Count(
+            recordedEvent => recordedEvent.IsExecutable && recordedEvent.HasReviewWarning
+        );
+        WarningCountText.Text = $"확인 {warningCount}";
+        WarningCountBadge.Visibility = warningCount > 0
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        BlockedCountText.Text = $"실행 불가 {blockedCount}";
+        BlockedCountBadge.Visibility = blockedCount > 0
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        RunMacroButton.Content = executableWarningCount > 0
+            ? $"▶ 경고 {executableWarningCount}개 포함 실행"
+            : "▶ 매크로 실행";
         var editingLocked =
             isStartupLoading
             || closeRequested
@@ -1613,8 +1647,6 @@ public partial class MainWindow : Window
             RecordedEvents.Count > 0 && !editingLocked;
         RunMacroButton.IsEnabled =
             RecordedEvents.Any(recordedEvent => recordedEvent.IsExecutable)
-            && currentProjectStatus == MacroProjectStatus.Completed
-            && isVideoReady
             && !isRecording
             && !isPreparingRecording
             && !isStartupLoading
@@ -1648,36 +1680,24 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (currentProjectStatus != MacroProjectStatus.Completed)
-        {
-            RecordingStatusText.Text =
-                "정상 완료되지 않은 녹화의 이벤트는 검토만 할 수 있습니다.";
-            return;
-        }
-
-        if (!isVideoReady)
-        {
-            RecordingStatusText.Text =
-                "영상이 정상적으로 열린 뒤 매크로를 실행할 수 있습니다.";
-            return;
-        }
-
-        QuarantineUnsafeEvents();
-        if (RecordedVideo.NaturalDuration.HasTimeSpan)
-        {
-            QuarantineEventsOutsideVideo(RecordedVideo.NaturalDuration.TimeSpan);
-        }
+        RefreshCaptureBounds();
+        ApplyEventPolicies();
         UpdateEventLogUi();
+        macroRunPreparationWarning = string.IsNullOrWhiteSpace(currentVideoPath)
+            ? "연결된 영상이 없어 현재 이벤트는 저장되지 않습니다. 현재 메모리 내용으로 실행합니다."
+            : null;
         try
         {
             projectSaveTimer.Stop();
-            await SaveCurrentProjectAsync(propagateFailure: true);
+            if (!string.IsNullOrWhiteSpace(currentVideoPath))
+            {
+                await SaveCurrentProjectAsync(propagateFailure: true);
+            }
         }
         catch
         {
-            RecordingStatusText.Text =
-                "최신 편집 내용을 저장하지 못해 실행을 중단했습니다.";
-            return;
+            macroRunPreparationWarning =
+                "최신 편집 내용을 저장하지 못했습니다. 현재 메모리의 이벤트로 실행합니다.";
         }
 
         if (isPlaying)
@@ -1712,8 +1732,8 @@ public partial class MainWindow : Window
         SetMacroCountdownUi(delaySeconds);
         if (requestedDelaySeconds <= 0 && requiresInputTarget)
         {
-            RecordingStatusText.Text =
-                "키보드 입력 대상 보호를 위해 3초 후 실행합니다. 지금 대상 입력창을 선택하세요.";
+            RecordingStatusText.Text +=
+                " 키보드 입력 대상을 선택할 시간을 확보하기 위해 최소 3초를 적용했습니다.";
         }
     }
 
@@ -1766,8 +1786,17 @@ public partial class MainWindow : Window
         PlaybackSpeedComboBox.IsEnabled = false;
         RecordingDot.Fill = new SolidColorBrush(Color.FromRgb(247, 144, 9));
         RecordingTimerText.Text = $"{delaySeconds:0.0}초 후";
+        var executableCount = RecordedEvents.Count(
+            recordedEvent => recordedEvent.IsExecutable
+        );
+        var warningCount = RecordedEvents.Count(
+            recordedEvent => recordedEvent.IsExecutable && recordedEvent.HasReviewWarning
+        );
+        var warningSummary = warningCount > 0
+            ? $"추가 확인 {warningCount}개를 포함한 "
+            : string.Empty;
         RecordingStatusText.Text =
-            $"{delaySeconds}초 후 실행합니다. 지금 대상 입력창이나 업무 화면을 선택하세요.";
+            $"{warningSummary}{executableCount}개 이벤트를 {delaySeconds}초 후 실행합니다. 지금 대상 입력창이나 업무 화면을 선택하세요.";
     }
 
     private void CancelMacroCountdown()
@@ -1779,28 +1808,8 @@ public partial class MainWindow : Window
 
     private void StartMacroExecution()
     {
-        if (currentProjectStatus != MacroProjectStatus.Completed)
-        {
-            isMacroCountingDown = false;
-            RestoreUiAfterMacro(
-                "정상 완료되지 않은 녹화의 이벤트는 실행할 수 없습니다.",
-                "실행 보류"
-            );
-            return;
-        }
-
-        QuarantineUnsafeEvents();
-        if (RecordedVideo.NaturalDuration.HasTimeSpan)
-        {
-            QuarantineEventsOutsideVideo(RecordedVideo.NaturalDuration.TimeSpan);
-        }
         RefreshCaptureBounds();
-        if (!TryValidateMacroEnvironment(out var validationError))
-        {
-            isMacroCountingDown = false;
-            RestoreUiAfterMacro(validationError, "실행 보류");
-            return;
-        }
+        ApplyEventPolicies();
 
         var executableEvents = RecordedEvents
             .Where(recordedEvent => recordedEvent.IsExecutable)
@@ -1814,28 +1823,21 @@ public partial class MainWindow : Window
             return;
         }
 
+        foreach (var recordedEvent in RecordedEvents)
+        {
+            recordedEvent.LastExecutionResult = recordedEvent.IsQuarantined
+                ? $"실행 불가 · {recordedEvent.QuarantineReason ?? "기술적으로 실행할 수 없는 이벤트입니다."}"
+                : null;
+            recordedEvent.LastExecutionFailed = recordedEvent.IsQuarantined;
+        }
+
         macroCountdownTimer.Stop();
         isMacroCountingDown = false;
         isMacroRunning = true;
         macroCancellation?.Dispose();
         macroCancellation = new CancellationTokenSource();
         SetMacroRunningUi(executableEvents.Count);
-        if (
-            executableEvents.Any(
-                item =>
-                    item.ActionKind
-                        is MacroActionKind.TextEntry
-                            or MacroActionKind.KeyStroke
-            )
-            && !TryRestoreMacroTargetWindow(out var targetError)
-        )
-        {
-            macroCancellation.Dispose();
-            macroCancellation = null;
-            RestoreUiAfterMacro(targetError, "실행 보류");
-            return;
-        }
-        _ = ExecuteMacroAsync(executableEvents, macroCancellation);
+        macroExecutionTask = ExecuteMacroAsync(executableEvents, macroCancellation);
     }
 
     private void SetMacroRunningUi(int eventCount)
@@ -1853,8 +1855,17 @@ public partial class MainWindow : Window
         PlaybackSpeedComboBox.IsEnabled = false;
         RecordingDot.Fill = new SolidColorBrush(Color.FromRgb(18, 183, 106));
         RecordingTimerText.Text = $"0/{eventCount}";
-        RecordingStatusText.Text =
-            "매크로 실행 중입니다. 중지하려면 Ctrl + Shift + F12를 누르세요.";
+        var warningCount = RecordedEvents.Count(
+            recordedEvent => recordedEvent.IsExecutable && recordedEvent.HasReviewWarning
+        );
+        var runSummary = warningCount > 0
+            ? $"추가 확인 {warningCount}개를 포함해 매크로를 실행 중입니다."
+            : "매크로 실행 중입니다.";
+        RecordingStatusText.Text = string.IsNullOrWhiteSpace(
+            macroRunPreparationWarning
+        )
+            ? $"{runSummary} 중지하려면 Ctrl + Shift + F12를 누르세요."
+            : $"{macroRunPreparationWarning} {runSummary} Ctrl + Shift + F12로 중지할 수 있습니다.";
     }
 
     private async Task ExecuteMacroAsync(
@@ -1863,6 +1874,8 @@ public partial class MainWindow : Window
     )
     {
         var clock = Stopwatch.StartNew();
+        var successCount = 0;
+        var failedCount = 0;
         try
         {
             for (var index = 0; index < executableEvents.Count; index++)
@@ -1878,20 +1891,58 @@ public partial class MainWindow : Window
                 RecordingTimerText.Text = $"{index + 1}/{executableEvents.Count}";
                 RecordingStatusText.Text =
                     $"매크로 실행 중 · {index + 1}/{executableEvents.Count} · {recordedEvent.Message}";
-                await Task.Run(
-                    () => ExecuteMacroEvent(recordedEvent),
-                    cancellationSource.Token
-                );
+                try
+                {
+                    await Task.Run(
+                        () => ExecuteMacroEvent(
+                            recordedEvent,
+                            cancellationSource.Token
+                        ),
+                        cancellationSource.Token
+                    );
+                    successCount++;
+                    recordedEvent.LastExecutionFailed = false;
+                    recordedEvent.LastExecutionResult = "실행 완료";
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (MacroInputCleanupException exception)
+                {
+                    failedCount++;
+                    recordedEvent.LastExecutionFailed = true;
+                    recordedEvent.LastExecutionResult =
+                        $"입력 상태 정리 실패 · {exception.Message}";
+                    throw;
+                }
+                catch (Exception exception)
+                {
+                    failedCount++;
+                    recordedEvent.LastExecutionFailed = true;
+                    recordedEvent.LastExecutionResult =
+                        $"건너뜀 · {exception.Message}";
+                }
             }
 
+            var blockedCount = RecordedEvents.Count(
+                recordedEvent => recordedEvent.IsQuarantined
+            );
             RestoreUiAfterMacro(
-                $"입력 {executableEvents.Count}개 전송을 마쳤습니다. 대상 업무 결과를 확인하세요.",
+                $"입력 전송을 마쳤습니다. 성공 {successCount} · 실패 {failedCount} · 실행 불가 {blockedCount}. 대상 업무 결과를 확인하세요.",
                 "실행 완료"
             );
         }
         catch (OperationCanceledException)
         {
             RestoreUiAfterMacro("매크로 실행을 중지했습니다.", "중지됨");
+        }
+        catch (MacroInputCleanupException exception)
+        {
+            RestoreUiAfterMacro(
+                $"입력 상태를 정리하지 못해 실행을 중단했습니다: {exception.Message}",
+                "실행 오류"
+            );
         }
         catch (Exception exception)
         {
@@ -1932,7 +1983,10 @@ public partial class MainWindow : Window
         }
     }
 
-    private void ExecuteMacroEvent(RecordedEvent recordedEvent)
+    private void ExecuteMacroEvent(
+        RecordedEvent recordedEvent,
+        CancellationToken cancellationToken
+    )
     {
         ValidateMacroEventTarget(recordedEvent);
         switch (recordedEvent.ActionKind)
@@ -1942,19 +1996,16 @@ public partial class MainWindow : Window
                 {
                     throw new InvalidOperationException("입력할 텍스트가 비어 있습니다.");
                 }
-                EnsureSimulationSucceeded(
-                    eventSimulator.SimulateTextEntry(text),
-                    "텍스트 입력"
-                );
+                ExecuteUnicodeTextWithCleanup(text, cancellationToken);
                 break;
             case MacroActionKind.KeyStroke:
                 if (recordedEvent.KeyCodes.Length == 0)
                 {
                     throw new InvalidOperationException("실행할 키 정보가 비어 있습니다.");
                 }
-                EnsureSimulationSucceeded(
-                    eventSimulator.SimulateKeyStroke(recordedEvent.KeyCodes),
-                    "키 입력"
+                ExecuteKeyStrokeWithCleanup(
+                    recordedEvent.KeyCodes,
+                    cancellationToken
                 );
                 break;
             case MacroActionKind.MouseLeftClick:
@@ -1970,39 +2021,6 @@ public partial class MainWindow : Window
                 ExecuteMouseWheel(recordedEvent);
                 break;
         }
-    }
-
-    private bool TryValidateMacroEnvironment(out string error)
-    {
-        foreach (
-            var recordedEvent in RecordedEvents.Where(
-                item =>
-                    item.IsExecutable
-                    && item.ScreenX.HasValue
-                    && item.ScreenY.HasValue
-                    && item.ActionKind
-                        is MacroActionKind.MouseLeftClick
-                            or MacroActionKind.MouseRightClick
-                            or MacroActionKind.MouseMiddleClick
-                            or MacroActionKind.MouseWheel
-            )
-        )
-        {
-            if (
-                recordedEvent.CaptureLeft != captureLeft
-                || recordedEvent.CaptureTop != captureTop
-                || recordedEvent.CaptureWidth != captureWidth
-                || recordedEvent.CaptureHeight != captureHeight
-            )
-            {
-                error =
-                    "현재 주 모니터의 위치나 해상도가 녹화 당시와 달라 실행을 보류했습니다.";
-                return false;
-            }
-        }
-
-        error = string.Empty;
-        return true;
     }
 
     private void ValidateMacroEventTarget(RecordedEvent recordedEvent)
@@ -2045,16 +2063,10 @@ public partial class MainWindow : Window
             }
         }
 
-        if (!IsPointInsideCapture(x, y))
-        {
-            throw new InvalidOperationException(
-                $"마우스 대상 ({x}, {y})이 현재 녹화 화면 밖입니다."
-            );
-        }
         if (IsOwnProcessWindowAt(x, y))
         {
             throw new InvalidOperationException(
-                "매크로가 녹화 앱 자체를 클릭하려 해 실행을 중단했습니다."
+                "매크로 앱 자체를 가리키는 이벤트라 이 이벤트만 건너뜁니다."
             );
         }
     }
@@ -2066,10 +2078,16 @@ public partial class MainWindow : Window
     {
         ExecuteWithRecordedModifiers(recordedEvent, () =>
         {
-            if (TryGetRecordedCursorPosition(recordedEvent, out var x, out var y))
+            if (
+                !TryGetRecordedCursorPosition(recordedEvent, out var x, out var y)
+                && !GetCursorPosition(out x, out y)
+            )
             {
-                MoveCursorTo(x, y);
+                throw new InvalidOperationException(
+                    "실행할 마우스 위치를 확인하지 못했습니다."
+                );
             }
+            MoveCursorTo(x, y);
 
             var (downFlag, upFlag) = mouseButton switch
             {
@@ -2082,6 +2100,7 @@ public partial class MainWindow : Window
             };
             Exception? clickError = null;
             var downSent = false;
+            var releaseFailed = false;
             try
             {
                 SendNativeMouseInputs(CreateNativeMouseInput(downFlag));
@@ -2102,6 +2121,7 @@ public partial class MainWindow : Window
                     }
                     catch (Exception releaseException)
                     {
+                        releaseFailed = true;
                         clickError = clickError is null
                             ? releaseException
                             : new AggregateException(
@@ -2115,7 +2135,12 @@ public partial class MainWindow : Window
 
             if (clickError is not null)
             {
-                throw clickError;
+                throw releaseFailed
+                    ? new MacroInputCleanupException(
+                        "마우스 버튼을 해제하지 못했습니다.",
+                        clickError
+                    )
+                    : clickError;
             }
         });
     }
@@ -2124,10 +2149,16 @@ public partial class MainWindow : Window
     {
         ExecuteWithRecordedModifiers(recordedEvent, () =>
         {
-            if (TryGetRecordedCursorPosition(recordedEvent, out var x, out var y))
+            if (
+                !TryGetRecordedCursorPosition(recordedEvent, out var x, out var y)
+                && !GetCursorPosition(out x, out y)
+            )
             {
-                MoveCursorTo(x, y);
+                throw new InvalidOperationException(
+                    "실행할 마우스 위치를 확인하지 못했습니다."
+                );
             }
+            MoveCursorTo(x, y);
 
             var rotation = recordedEvent.WheelRotation == 0
                 ? 120
@@ -2190,7 +2221,7 @@ public partial class MainWindow : Window
             }
         }
 
-        if (actionError is not null || releaseErrors.Count > 0)
+        if (releaseErrors.Count > 0)
         {
             var errors = new List<Exception>();
             if (actionError is not null)
@@ -2198,12 +2229,134 @@ public partial class MainWindow : Window
                 errors.Add(actionError);
             }
             errors.AddRange(releaseErrors);
-            throw errors.Count == 1
-                ? errors[0]
-                : new AggregateException(
-                    "마우스 동작 후 입력 상태를 완전히 정리하지 못했습니다.",
-                    errors
+            throw new MacroInputCleanupException(
+                "마우스 동작 후 modifier 입력 상태를 완전히 정리하지 못했습니다.",
+                errors.Count == 1
+                    ? errors[0]
+                    : new AggregateException(errors)
+            );
+        }
+
+        if (actionError is not null)
+        {
+            throw actionError;
+        }
+    }
+
+    private void ExecuteKeyStrokeWithCleanup(
+        IReadOnlyList<KeyCode> keyCodes,
+        CancellationToken cancellationToken
+    )
+    {
+        var attemptedKeys = new List<KeyCode>();
+        Exception? pressError = null;
+        var releaseErrors = new List<Exception>();
+        try
+        {
+            foreach (var keyCode in keyCodes)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                attemptedKeys.Add(keyCode);
+                EnsureSimulationSucceeded(
+                    eventSimulator.SimulateKeyPress(keyCode),
+                    $"{keyCode} 누르기"
                 );
+            }
+        }
+        catch (Exception exception)
+        {
+            pressError = exception;
+        }
+        finally
+        {
+            for (var index = attemptedKeys.Count - 1; index >= 0; index--)
+            {
+                try
+                {
+                    EnsureSimulationSucceeded(
+                        eventSimulator.SimulateKeyRelease(attemptedKeys[index]),
+                        $"{attemptedKeys[index]} 떼기"
+                    );
+                }
+                catch (Exception exception)
+                {
+                    releaseErrors.Add(exception);
+                }
+            }
+        }
+
+        if (releaseErrors.Count > 0)
+        {
+            var errors = new List<Exception>();
+            if (pressError is not null)
+            {
+                errors.Add(pressError);
+            }
+            errors.AddRange(releaseErrors);
+            throw new MacroInputCleanupException(
+                "키 입력 상태를 완전히 정리하지 못했습니다.",
+                errors.Count == 1
+                    ? errors[0]
+                    : new AggregateException(errors)
+            );
+        }
+
+        if (pressError is not null)
+        {
+            throw pressError;
+        }
+    }
+
+    private static void ExecuteUnicodeTextWithCleanup(
+        string text,
+        CancellationToken cancellationToken
+    )
+    {
+        foreach (var codeUnit in text)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Exception? pressError = null;
+            Exception? releaseError = null;
+            try
+            {
+                SendNativeKeyboardInput(
+                    CreateUnicodeKeyboardInput(codeUnit, keyUp: false),
+                    $"문자 U+{(int)codeUnit:X4} 누르기"
+                );
+            }
+            catch (Exception exception)
+            {
+                pressError = exception;
+            }
+            finally
+            {
+                try
+                {
+                    SendNativeKeyboardInput(
+                        CreateUnicodeKeyboardInput(codeUnit, keyUp: true),
+                        $"문자 U+{(int)codeUnit:X4} 떼기"
+                    );
+                }
+                catch (Exception exception)
+                {
+                    releaseError = exception;
+                }
+            }
+
+            if (releaseError is not null)
+            {
+                throw new MacroInputCleanupException(
+                    "텍스트 키 입력 상태를 완전히 정리하지 못했습니다.",
+                    pressError is null
+                        ? releaseError
+                        : new AggregateException(pressError, releaseError)
+                );
+            }
+
+            if (pressError is not null)
+            {
+                throw pressError;
+            }
         }
     }
 
@@ -2230,13 +2383,32 @@ public partial class MainWindow : Window
         return true;
     }
 
-    private static void MoveCursorTo(int x, int y)
+    private void MoveCursorTo(int x, int y)
     {
         if (!SetCursorPos(x, y))
         {
             throw new System.ComponentModel.Win32Exception(
                 Marshal.GetLastWin32Error(),
                 $"마우스 포인터를 ({x}, {y})로 이동하지 못했습니다."
+            );
+        }
+
+        if (!GetCursorPosition(out var actualX, out var actualY))
+        {
+            throw new InvalidOperationException(
+                "이동 후 실제 마우스 위치를 확인하지 못했습니다."
+            );
+        }
+        if (actualX != x || actualY != y)
+        {
+            throw new InvalidOperationException(
+                $"요청한 좌표 ({x}, {y}) 대신 ({actualX}, {actualY})로 이동되어 이 이벤트만 건너뜁니다."
+            );
+        }
+        if (IsOwnProcessWindowAt(actualX, actualY))
+        {
+            throw new InvalidOperationException(
+                "매크로 앱 자체를 가리키는 이벤트라 이 이벤트만 건너뜁니다."
             );
         }
     }
@@ -2258,6 +2430,35 @@ public partial class MainWindow : Window
                 },
             },
         };
+    }
+
+    private static NativeInput CreateUnicodeKeyboardInput(char codeUnit, bool keyUp)
+    {
+        return new NativeInput
+        {
+            Type = InputKeyboard,
+            Data = new NativeInputUnion
+            {
+                Keyboard = new NativeKeyboardInput
+                {
+                    ScanCode = codeUnit,
+                    Flags = KeyEventUnicode | (keyUp ? KeyEventKeyUp : 0),
+                },
+            },
+        };
+    }
+
+    private static void SendNativeKeyboardInput(NativeInput input, string operation)
+    {
+        var inputs = new[] { input };
+        var sent = SendInput(1, inputs, Marshal.SizeOf<NativeInput>());
+        if (sent != 1)
+        {
+            throw new System.ComponentModel.Win32Exception(
+                Marshal.GetLastWin32Error(),
+                $"{operation} 입력을 전송하지 못했습니다."
+            );
+        }
     }
 
     private static void SendNativeMouseInputs(params NativeInput[] inputs)
@@ -2292,6 +2493,7 @@ public partial class MainWindow : Window
         isMacroCountingDown = false;
         isMacroRunning = false;
         macroTargetWindow = IntPtr.Zero;
+        macroRunPreparationWarning = null;
         EventLogList.IsEnabled = true;
         ManualEditorPanel.IsEnabled = true;
         StopMacroButton.IsEnabled = false;
@@ -2331,6 +2533,7 @@ public partial class MainWindow : Window
             Sequence = ++nextEventSequence,
         };
         ConfigureManualAction(recordedEvent, actionTag, activity, keyCodes);
+        ApplyEventPolicy(recordedEvent);
         InsertEventChronologically(recordedEvent);
         UpdateEventLogUi();
         EventLogList.SelectedItem = recordedEvent;
@@ -2365,31 +2568,30 @@ public partial class MainWindow : Window
 
         var previousActionTag = GetManualActionTag(recordedEvent);
         var previousActivity = GetManualEditorActivity(recordedEvent);
-        recordedEvent.Offset = offset;
-        if (
-            recordedEvent.IsQuarantined
-            && recordedEvent.QuarantineReason?.StartsWith(
-                "영상 길이 ",
-                StringComparison.Ordinal
-            ) == true
-        )
-        {
-            recordedEvent.IsQuarantined = false;
-            recordedEvent.QuarantineReason = null;
-        }
-
-        if (
+        var actionKindChanged =
             !string.Equals(
                 previousActionTag,
                 actionTag,
                 StringComparison.Ordinal
-            )
-            || !string.Equals(
+            );
+        var activityChanged =
+            !string.Equals(
                 previousActivity,
                 activity,
                 StringComparison.Ordinal
-            )
-        )
+            );
+        var actionPayloadChanged = actionKindChanged || activityChanged;
+        var repairsPolicyBlockedPointer =
+            IsPointerActionTag(actionTag)
+            && recordedEvent.IsQuarantined
+            && string.Equals(
+                recordedEvent.QuarantineReason,
+                MacroEventPolicy.GetTechnicalBlockReason(recordedEvent),
+                StringComparison.Ordinal
+            );
+        ClearExecutionResults();
+        recordedEvent.Offset = offset;
+        if (actionPayloadChanged || repairsPolicyBlockedPointer)
         {
             if (
                 IsPointerActionTag(actionTag)
@@ -2400,24 +2602,23 @@ public partial class MainWindow : Window
                         or MacroActionKind.MouseWheel
             )
             {
-                if (
-                    !string.Equals(
-                        previousActionTag,
-                        actionTag,
-                        StringComparison.Ordinal
-                    )
-                )
+                if (actionKindChanged || repairsPolicyBlockedPointer)
                 {
+                    recordedEvent.IsQuarantined = false;
+                    recordedEvent.QuarantineReason = null;
                     ApplyPointerActionKind(recordedEvent, actionTag);
                 }
                 UpdatePointerPresentation(recordedEvent, activity);
             }
             else
             {
+                recordedEvent.IsQuarantined = false;
+                recordedEvent.QuarantineReason = null;
                 ConfigureManualAction(recordedEvent, actionTag, activity, keyCodes);
             }
         }
 
+        ApplyEventPolicy(recordedEvent);
         NormalizeEventOrder();
         ManualEditorModeText.Text = $"선택: {recordedEvent.TimeText}";
         SetManualEditorMessage(
@@ -2527,12 +2728,8 @@ public partial class MainWindow : Window
         )
         {
             SetManualEditorMessage(
-                $"시점은 영상 길이 "
-                + $"{RecordedVideo.NaturalDuration.TimeSpan.TotalSeconds:0.000}초 이하여야 합니다."
+                $"영상 종료 후 {offset.TotalSeconds:0.000}초에 실행됩니다. 경고로 표시하지만 추가를 막지 않습니다."
             );
-            ManualSecondsTextBox.Focus();
-            ManualSecondsTextBox.SelectAll();
-            return false;
         }
 
         return true;
@@ -2692,6 +2889,7 @@ public partial class MainWindow : Window
         recordedEvent.ScreenY = null;
         recordedEvent.IsQuarantined = false;
         recordedEvent.QuarantineReason = null;
+        recordedEvent.ReviewWarningText = null;
 
         switch (actionTag)
         {
@@ -3004,7 +3202,7 @@ public partial class MainWindow : Window
                     projectRevision++;
                     if (currentProjectStatus != MacroProjectStatus.Completed)
                     {
-                        QuarantineIncompleteProjectEvents();
+                        ApplyEventPolicies();
                     }
                     LoadRecordedVideo(e.FilePath);
                     var saved = await SaveCurrentProjectAsync();
@@ -3117,12 +3315,12 @@ public partial class MainWindow : Window
         {
             currentProjectStatus = MacroProjectStatus.Failed;
             projectRevision++;
-            QuarantineIncompleteProjectEvents();
+            ApplyEventPolicies();
         }
         SetRecordingUi(false);
         DisposeRecorder();
         RecordingStatusText.Text = recordingSessionCommitted
-            ? $"{message} 현재 이벤트는 보존했지만 영상 검증 전이라 실행을 잠갔습니다."
+            ? $"{message} 현재 이벤트는 보존했습니다. 경고를 표시하며 실행은 사용자가 결정합니다."
             : $"{message} 기존 로그는 그대로 보존했습니다.";
         isVideoReady = recordingSessionCommitted
             ? false
@@ -3210,7 +3408,7 @@ public partial class MainWindow : Window
         if (RecordedVideo.NaturalDuration.HasTimeSpan)
         {
             isVideoReady = true;
-            QuarantineEventsOutsideVideo(RecordedVideo.NaturalDuration.TimeSpan);
+            ApplyEventPolicies();
             VideoPositionSlider.Maximum =
                 RecordedVideo.NaturalDuration.TimeSpan.TotalSeconds;
             UpdateVideoTimeText();
@@ -3236,7 +3434,7 @@ public partial class MainWindow : Window
         {
             currentProjectStatus = MacroProjectStatus.Failed;
             projectRevision++;
-            QuarantineIncompleteProjectEvents();
+            ApplyEventPolicies();
             ScheduleProjectSave();
         }
         isVideoReady = false;
@@ -3246,7 +3444,7 @@ public partial class MainWindow : Window
         PlaybackSpeedComboBox.IsEnabled = false;
         VideoStatusText.Text = "영상을 열지 못했습니다.";
         RecordingStatusText.Text =
-            $"영상 검증 실패로 매크로 실행을 잠갔습니다: {e.ErrorException.Message}";
+            $"영상을 열지 못했지만 이벤트 로그는 실행할 수 있습니다: {e.ErrorException.Message}";
         UpdateEventLogUi();
     }
 
@@ -3373,139 +3571,108 @@ public partial class MainWindow : Window
         RenderEventOverlay(position);
     }
 
-    private void QuarantineEventsOutsideVideo(TimeSpan duration)
+    private void ApplyEventPolicies()
     {
-        var changed = false;
-        foreach (
-            var recordedEvent in RecordedEvents.Where(
-                item =>
-                    item.ActionKind != MacroActionKind.None
-                    && item.Offset > duration
-            )
-        )
+        var videoDuration = RecordedVideo.NaturalDuration.HasTimeSpan
+            ? RecordedVideo.NaturalDuration.TimeSpan
+            : (TimeSpan?)null;
+        foreach (var recordedEvent in RecordedEvents)
         {
-            if (recordedEvent.IsQuarantined)
-            {
-                continue;
-            }
-
-            recordedEvent.QuarantineReason =
-                $"영상 길이 {duration.TotalSeconds:0.000}초 밖의 이벤트입니다.";
-            recordedEvent.IsQuarantined = true;
-            changed = true;
-        }
-
-        if (changed)
-        {
-            UpdateEventLogUi();
-            ScheduleProjectSave();
+            ApplyEventPolicy(recordedEvent, videoDuration);
         }
     }
 
-    private void QuarantineIncompleteProjectEvents()
+    private void ClearExecutionResults()
     {
-        var changed = false;
-        foreach (
-            var recordedEvent in RecordedEvents.Where(
-                item =>
-                    item.ActionKind != MacroActionKind.None
-                    && !item.IsQuarantined
-            )
-        )
+        foreach (var recordedEvent in RecordedEvents)
         {
-            recordedEvent.QuarantineReason =
-                "녹화가 정상 완료되지 않아 자동 실행에서 제외했습니다.";
-            recordedEvent.IsQuarantined = true;
-            changed = true;
-        }
-
-        if (changed)
-        {
-            UpdateEventLogUi();
+            recordedEvent.LastExecutionResult = null;
+            recordedEvent.LastExecutionFailed = false;
         }
     }
 
-    private void QuarantineUnsafeEvents()
+    private void ApplyEventPolicy(
+        RecordedEvent recordedEvent,
+        TimeSpan? videoDuration = null
+    )
     {
-        foreach (
-            var recordedEvent in RecordedEvents.Where(
-                item => item.ActionKind != MacroActionKind.None
+        MigrateLegacyReviewOnlyQuarantine(recordedEvent);
+        videoDuration ??= RecordedVideo.NaturalDuration.HasTimeSpan
+            ? RecordedVideo.NaturalDuration.TimeSpan
+            : null;
+
+        var technicalBlockReason = MacroEventPolicy.GetTechnicalBlockReason(
+            recordedEvent
+        );
+        if (technicalBlockReason is not null)
+        {
+            recordedEvent.IsQuarantined = true;
+            recordedEvent.QuarantineReason = technicalBlockReason;
+        }
+        else if (
+            recordedEvent.IsQuarantined
+            && string.IsNullOrWhiteSpace(recordedEvent.QuarantineReason)
+        )
+        {
+            recordedEvent.QuarantineReason =
+                "현재 엔진이 기술적으로 실행할 수 없는 이벤트입니다.";
+        }
+
+        var warnings = new List<string>();
+        var policyWarning = MacroEventPolicy.GetReviewWarningText(
+            recordedEvent,
+            currentProjectStatus,
+            videoDuration,
+            captureLeft,
+            captureTop,
+            captureWidth,
+            captureHeight
+        );
+        if (!string.IsNullOrWhiteSpace(policyWarning))
+        {
+            warnings.Add(policyWarning);
+        }
+        if (
+            recordedEvent.ActionKind != MacroActionKind.None
+            && string.IsNullOrWhiteSpace(currentVideoPath)
+        )
+        {
+            warnings.Add(
+                "연결된 영상이 없어 현재 세션 이벤트는 저장되지 않습니다."
+            );
+        }
+        else if (
+            recordedEvent.ActionKind != MacroActionKind.None
+            && !isVideoReady
+            && !isRecording
+            && !isPreparingRecording
+            && !isFinalizing
+        )
+        {
+            warnings.Add("영상을 확인할 수 없지만 이벤트 로그는 실행할 수 있습니다.");
+        }
+        recordedEvent.ReviewWarningText = warnings.Count == 0
+            ? null
+            : string.Join(" · ", warnings);
+    }
+
+    private static void MigrateLegacyReviewOnlyQuarantine(
+        RecordedEvent recordedEvent
+    )
+    {
+        if (
+            !recordedEvent.IsQuarantined
+            || !MacroEventPolicy.IsLegacyReviewOnlyQuarantine(
+                recordedEvent.QuarantineReason
             )
         )
         {
-            string? invalidPayloadReason = recordedEvent.ActionKind switch
-            {
-                MacroActionKind.TextEntry
-                    when string.IsNullOrEmpty(recordedEvent.ActionText) =>
-                    "입력할 텍스트가 비어 있습니다.",
-                MacroActionKind.KeyStroke
-                    when recordedEvent.KeyCodes.Length == 0 =>
-                    "실행할 키 정보가 비어 있습니다.",
-                MacroActionKind.MouseWheel
-                    when recordedEvent.WheelRotation == 0 =>
-                    "휠 이동량이 0입니다.",
-                _ => null,
-            };
-            if (
-                invalidPayloadReason is null
-                && recordedEvent.ActionKind
-                    is MacroActionKind.MouseLeftClick
-                        or MacroActionKind.MouseRightClick
-                        or MacroActionKind.MouseMiddleClick
-                        or MacroActionKind.MouseWheel
-                && recordedEvent.ScreenX.HasValue
-                    != recordedEvent.ScreenY.HasValue
-            )
-            {
-                invalidPayloadReason =
-                    "마우스 좌표의 X 또는 Y 값이 누락되었습니다.";
-            }
-            if (invalidPayloadReason is not null)
-            {
-                recordedEvent.QuarantineReason = invalidPayloadReason;
-                recordedEvent.IsQuarantined = true;
-                continue;
-            }
-
-            if (
-                recordedEvent.ActionKind == MacroActionKind.KeyStroke
-                && IsEmergencyStopKeyChord(recordedEvent.KeyCodes)
-            )
-            {
-                recordedEvent.QuarantineReason =
-                    "긴급 중지 전용 단축키는 재생할 수 없습니다.";
-                recordedEvent.IsQuarantined = true;
-                continue;
-            }
-
-            if (
-                recordedEvent.ActionKind
-                    is MacroActionKind.MouseLeftClick
-                        or MacroActionKind.MouseRightClick
-                        or MacroActionKind.MouseMiddleClick
-                        or MacroActionKind.MouseWheel
-                && recordedEvent.ScreenX is double x
-                && recordedEvent.ScreenY is double y
-                && (
-                    !double.IsFinite(x)
-                    || !double.IsFinite(y)
-                    || recordedEvent.CaptureWidth <= 0
-                    || recordedEvent.CaptureHeight <= 0
-                    ||
-                    x < recordedEvent.CaptureLeft
-                    || x >= recordedEvent.CaptureLeft
-                        + recordedEvent.CaptureWidth
-                    || y < recordedEvent.CaptureTop
-                    || y >= recordedEvent.CaptureTop
-                        + recordedEvent.CaptureHeight
-                )
-            )
-            {
-                recordedEvent.QuarantineReason =
-                    "녹화된 화면 밖의 마우스 이벤트입니다.";
-                recordedEvent.IsQuarantined = true;
-            }
+            return;
         }
+
+        recordedEvent.ReviewWarningText = recordedEvent.QuarantineReason;
+        recordedEvent.QuarantineReason = null;
+        recordedEvent.IsQuarantined = false;
     }
 
     private void RenderEventOverlay(TimeSpan videoPosition)
@@ -3523,8 +3690,9 @@ public partial class MainWindow : Window
         var activeEvents = RecordedEvents
             .Where(
                 recordedEvent =>
-                    !recordedEvent.IsQuarantined
-                    && !string.IsNullOrWhiteSpace(recordedEvent.OverlayLabel)
+                    !string.IsNullOrWhiteSpace(
+                        recordedEvent.OverlayLabel ?? recordedEvent.Message
+                    )
                     && videoPosition >= recordedEvent.Offset
                     && videoPosition - recordedEvent.Offset <= EventOverlayDuration
             )
@@ -3554,7 +3722,21 @@ public partial class MainWindow : Window
             "수동" => ManualEventBrush,
             _ => MouseEventBrush,
         };
-        var label = recordedEvent.OverlayLabel ?? recordedEvent.Message;
+        if (recordedEvent.IsQuarantined)
+        {
+            eventBrush = OutsideEventBrush;
+        }
+        else if (recordedEvent.HasReviewWarning)
+        {
+            eventBrush = ReviewWarningBrush;
+        }
+
+        var baseLabel = recordedEvent.OverlayLabel ?? recordedEvent.Message;
+        var label = recordedEvent.IsQuarantined
+            ? $"실행 불가 · {baseLabel}"
+            : recordedEvent.HasReviewWarning
+                ? $"확인 · {baseLabel}"
+                : baseLabel;
 
         if (
             recordedEvent.ScreenX is not double screenX
@@ -3717,7 +3899,23 @@ public partial class MainWindow : Window
 
     private bool IsForegroundInputInsideCapture()
     {
-        return TryValidateForegroundInput(out _);
+        var foregroundWindow = GetForegroundWindow();
+        if (
+            !TryGetExternalInputWindow(
+                foregroundWindow,
+                out var window,
+                out _
+            )
+            || !GetWindowRect(window, out var bounds)
+        )
+        {
+            return false;
+        }
+
+        return bounds.Right > captureLeft
+            && bounds.Left < captureLeft + captureWidth
+            && bounds.Bottom > captureTop
+            && bounds.Top < captureTop + captureHeight;
     }
 
     private void RememberMacroTargetWindow()
@@ -3835,26 +4033,6 @@ public partial class MainWindow : Window
         if (IsOwnProcessWindow(window))
         {
             error = "매크로 앱 자체에는 키보드 입력을 보낼 수 없습니다.";
-            return false;
-        }
-
-        if (!GetWindowRect(window, out var bounds))
-        {
-            error = "키보드 입력 대상 창의 화면 위치를 확인하지 못했습니다.";
-            return false;
-        }
-
-        var intersectsCapture = bounds.Right > captureLeft
-            && bounds.Left < captureLeft + captureWidth
-            && bounds.Bottom > captureTop
-            && bounds.Top < captureTop + captureHeight;
-        if (!intersectsCapture)
-        {
-            error =
-                "키보드 입력 대상 창이 주 모니터 밖입니다. "
-                + $"대상=({bounds.Left},{bounds.Top})-({bounds.Right},{bounds.Bottom}), "
-                + $"녹화화면=({captureLeft},{captureTop})-"
-                + $"({captureLeft + captureWidth},{captureTop + captureHeight})";
             return false;
         }
 
@@ -4039,24 +4217,53 @@ public partial class MainWindow : Window
 
     private async Task FinishCloseRequestAsync()
     {
-        if (!closeRequested || isRecording || isPreparingRecording || isFinalizing)
+        if (
+            !closeRequested
+            || closeAfterSave
+            || isCompletingCloseRequest
+            || isRecording
+            || isPreparingRecording
+            || isFinalizing
+        )
         {
             return;
         }
 
-        projectSaveTimer.Stop();
-        var saved = await SaveCurrentProjectAsync();
-        if (!saved)
+        isCompletingCloseRequest = true;
+        try
         {
-            closeRequested = false;
-            SetRecordingUi(false);
-            RecordingStatusText.Text =
-                "마지막 편집 내용을 저장하지 못해 종료를 취소했습니다.";
-            return;
-        }
+            var executionTask = macroExecutionTask;
+            if (executionTask is not null && !executionTask.IsCompleted)
+            {
+                RecordingStatusText.Text =
+                    "실행을 중지하고 현재 입력을 해제한 뒤 종료합니다…";
+                await executionTask;
+            }
 
-        closeAfterSave = true;
-        Close();
+            projectSaveTimer.Stop();
+            var saved = await SaveCurrentProjectAsync();
+            if (!saved)
+            {
+                closeRequested = false;
+                SetRecordingUi(false);
+                RecordingStatusText.Text =
+                    "마지막 편집 내용을 저장하지 못해 종료를 취소했습니다.";
+                return;
+            }
+
+            closeAfterSave = true;
+            _ = Dispatcher.BeginInvoke(
+                DispatcherPriority.Normal,
+                new Action(Close)
+            );
+        }
+        finally
+        {
+            if (!closeAfterSave)
+            {
+                isCompletingCloseRequest = false;
+            }
+        }
     }
 
     private void CleanupForClose()
@@ -4084,11 +4291,25 @@ public partial class MainWindow : Window
         }
     }
 
+    private sealed class MacroInputCleanupException(
+        string message,
+        Exception innerException
+    ) : Exception(message, innerException);
+
     [StructLayout(LayoutKind.Sequential)]
     private struct NativePoint
     {
         public int X;
         public int Y;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeRect
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
     }
 
     private sealed class PendingMousePress(
@@ -4127,15 +4348,6 @@ public partial class MainWindow : Window
                 WasDragged = true;
             }
         }
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct NativeRect
-    {
-        public int Left;
-        public int Top;
-        public int Right;
-        public int Bottom;
     }
 
     [StructLayout(LayoutKind.Sequential)]

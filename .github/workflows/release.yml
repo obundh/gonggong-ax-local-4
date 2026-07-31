@@ -1,0 +1,250 @@
+name: windows-release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          submodules: false
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.302
+
+      - name: Restore locked dependencies
+        run: dotnet restore .\tests\Series4.Desktop.Tests\Series4.Desktop.Tests.csproj --locked-mode
+
+      - name: Build with warnings as errors
+        run: dotnet build .\Series4.Desktop.csproj -c Release -p:Platform=x64 --no-restore -warnaserror
+
+      - name: Test macro policy
+        run: dotnet test .\tests\Series4.Desktop.Tests\Series4.Desktop.Tests.csproj -c Release -p:Platform=x64 --no-restore --logger "console;verbosity=normal"
+
+      - name: Install verified Inno Setup 6.7.3 compiler
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $downloadUrl = "https://github.com/jrsoftware/issrc/releases/download/is-6_7_3/innosetup-6.7.3.exe"
+          $installer = Join-Path $env:RUNNER_TEMP "innosetup-6.7.3.exe"
+          $installDir = Join-Path $env:RUNNER_TEMP "Inno Setup 6"
+          Invoke-WebRequest -Uri $downloadUrl -OutFile $installer
+
+          $signature = Get-AuthenticodeSignature -LiteralPath $installer
+          if ($signature.Status -ne "Valid") {
+            throw "Inno Setup installer signature is not valid: $($signature.Status)"
+          }
+          if ($signature.SignerCertificate.Subject -notmatch "Pyrsys B\.V\.") {
+            throw "Unexpected Inno Setup signer: $($signature.SignerCertificate.Subject)"
+          }
+
+          $process = Start-Process -FilePath $installer -ArgumentList @(
+            "/VERYSILENT",
+            "/SUPPRESSMSGBOXES",
+            "/NORESTART",
+            "/CURRENTUSER",
+            "/DIR=`"$installDir`""
+          ) -Wait -PassThru
+          if ($process.ExitCode -ne 0) {
+            throw "Inno Setup installation failed with exit code $($process.ExitCode)."
+          }
+
+          $compiler = Join-Path $installDir "ISCC.exe"
+          if (-not (Test-Path -LiteralPath $compiler -PathType Leaf)) {
+            throw "ISCC.exe was not installed at $compiler"
+          }
+          "ISCC_PATH=$compiler" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Verify tag matches project version
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: |
+          [xml]$project = Get-Content .\Series4.Desktop.csproj -Encoding UTF8
+          $version = [string]($project.Project.PropertyGroup.Version | Select-Object -First 1)
+          $expectedTag = "v$version"
+          if ($env:GITHUB_REF_NAME -ne $expectedTag) {
+            throw "Tag $env:GITHUB_REF_NAME does not match project version $version. Expected $expectedTag."
+          }
+
+      - name: Build self-contained installer and portable package
+        shell: pwsh
+        run: |
+          .\scripts\build-release.ps1 `
+            -DotNetPath (Get-Command dotnet).Source `
+            -InnoCompiler $env:ISCC_PATH `
+            -NoRestore
+
+      - name: Verify release checksums
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $releaseDir = Resolve-Path .\artifacts\release
+          $lines = Get-Content (Join-Path $releaseDir "SHA256SUMS.txt")
+          foreach ($line in $lines) {
+            if ($line -notmatch '^([0-9a-f]{64})  (.+)$') {
+              throw "Malformed checksum line: $line"
+            }
+            $expected = $Matches[1]
+            $file = Join-Path $releaseDir $Matches[2]
+            $actual = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($actual -ne $expected) {
+              throw "SHA-256 mismatch: $file"
+            }
+          }
+
+      - name: Smoke test portable and installer packages
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          [xml]$project = Get-Content .\Series4.Desktop.csproj -Encoding UTF8
+          $version = [string]($project.Project.PropertyGroup.Version | Select-Object -First 1)
+          $smokeRoot = Join-Path $env:RUNNER_TEMP "공공 AX smoke"
+          $portableRoot = Join-Path $smokeRoot "portable"
+          $installDir = Join-Path $smokeRoot "설치 경로"
+          New-Item -ItemType Directory -Path $portableRoot -Force | Out-Null
+
+          function Find-AppExecutable([string]$Root) {
+            $runtimeConfigs = @(Get-ChildItem -LiteralPath $Root -Recurse -Filter "*.runtimeconfig.json" -File)
+            if ($runtimeConfigs.Count -ne 1) {
+              throw "Expected exactly one application runtimeconfig under $Root; found $($runtimeConfigs.Count)."
+            }
+            $assemblyName = $runtimeConfigs[0].Name -replace '\.runtimeconfig\.json$', ''
+            $executable = Join-Path $runtimeConfigs[0].DirectoryName "$assemblyName.exe"
+            if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) {
+              throw "Application executable matching the runtimeconfig was not found: $executable"
+            }
+            return Get-Item -LiteralPath $executable
+          }
+
+          function Assert-AppStarts([string]$Executable) {
+            $process = Start-Process -FilePath $Executable -WorkingDirectory (Split-Path $Executable) -PassThru
+            Start-Sleep -Seconds 5
+            if ($process.HasExited) {
+              throw "Application exited during startup smoke test with code $($process.ExitCode): $Executable"
+            }
+            if (-not $process.CloseMainWindow()) {
+              Stop-Process -Id $process.Id -Force
+              throw "Application did not expose a closable main window: $Executable"
+            }
+            if (-not $process.WaitForExit(15000)) {
+              Stop-Process -Id $process.Id -Force
+              throw "Application did not close during smoke test: $Executable"
+            }
+            if ($process.ExitCode -ne 0) {
+              throw "Application exited with code $($process.ExitCode) after CloseMainWindow: $Executable"
+            }
+          }
+
+          $portableZip = Resolve-Path ".\artifacts\release\GonggongAX-Series4-Portable-x64-v$version.zip"
+          tar.exe -xf $portableZip -C $portableRoot
+          if ($LASTEXITCODE -ne 0) {
+            throw "Portable archive extraction failed."
+          }
+          $portableExe = Find-AppExecutable $portableRoot
+          Assert-AppStarts $portableExe.FullName
+
+          $setup = Resolve-Path ".\artifacts\release\GonggongAX-Series4-Setup-x64-v$version.exe"
+          $setupProcess = Start-Process -FilePath $setup -ArgumentList @(
+            "/VERYSILENT",
+            "/SUPPRESSMSGBOXES",
+            "/NORESTART",
+            "/CURRENTUSER",
+            "/NOICONS",
+            "/DIR=`"$installDir`""
+          ) -Wait -PassThru
+          if ($setupProcess.ExitCode -ne 0) {
+            throw "Silent installer smoke test failed with code $($setupProcess.ExitCode)."
+          }
+
+          $installedExe = Find-AppExecutable $installDir
+          Assert-AppStarts $installedExe.FullName
+
+          $uninstaller = Get-ChildItem $installDir -Filter "unins*.exe" -File | Select-Object -First 1
+          if ($null -eq $uninstaller) {
+            throw "Uninstaller was not created."
+          }
+          $uninstallProcess = Start-Process -FilePath $uninstaller.FullName -ArgumentList @(
+            "/VERYSILENT",
+            "/SUPPRESSMSGBOXES",
+            "/NORESTART"
+          ) -Wait -PassThru
+          if ($uninstallProcess.ExitCode -ne 0) {
+            throw "Silent uninstall smoke test failed with code $($uninstallProcess.ExitCode)."
+          }
+          if (Test-Path -LiteralPath $installDir) {
+            throw "Silent uninstall left the application directory behind: $installDir"
+          }
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: GonggongAX-Series4-Windows-x64-${{ github.sha }}
+          path: artifacts/release/*
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Prepare release notes
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: |
+          $notes = Get-Content .\docs\RELEASE_NOTES.md -Raw -Encoding UTF8
+          $checksums = Get-Content .\artifacts\release\SHA256SUMS.txt -Raw -Encoding ASCII
+          $body = @(
+            $notes,
+            "",
+            "빌드 커밋: ``$env:GITHUB_SHA``",
+            "",
+            "### SHA-256",
+            "",
+            '```text',
+            $checksums.Trim(),
+            '```'
+          ) -join "`n"
+          Set-Content .\artifacts\release-notes.md -Value $body -Encoding UTF8
+
+      - name: Create or update draft GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $tag = $env:GITHUB_REF_NAME
+          $assets = @(Get-ChildItem .\artifacts\release -File | ForEach-Object FullName)
+          $currentAssetNames = @($assets | ForEach-Object { Split-Path -Leaf $_ })
+          $title = "공공 AX 업무 매크로 $tag · Windows x64"
+          $existingDraft = gh release view $tag --json isDraft --jq '.isDraft' 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            if ($existingDraft -ne "true") {
+              throw "Release $tag is already public; refusing to replace its assets."
+            }
+            $existingAssetNames = @(gh release view $tag --json assets --jq '.assets[].name')
+            if ($LASTEXITCODE -ne 0) { throw "Draft release asset listing failed." }
+            $staleAssetNames = @($existingAssetNames | Where-Object { $currentAssetNames -notcontains $_ })
+            if ($staleAssetNames.Count -gt 0) {
+              throw "Draft release contains stale assets outside this build: $($staleAssetNames -join ', ')"
+            }
+            gh release upload $tag @assets --clobber
+            if ($LASTEXITCODE -ne 0) { throw "Draft release asset upload failed." }
+            gh release edit $tag --title $title --notes-file .\artifacts\release-notes.md
+            if ($LASTEXITCODE -ne 0) { throw "Draft release update failed." }
+          } else {
+            gh release create $tag @assets `
+              --verify-tag `
+              --title $title `
+              --notes-file .\artifacts\release-notes.md `
+              --draft
+            if ($LASTEXITCODE -ne 0) { throw "Draft release creation failed." }
+          }

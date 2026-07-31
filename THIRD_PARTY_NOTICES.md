@@ -1,9 +1,23 @@
 # 제3자 소프트웨어 및 이미지 고지
 
-이 저장소는 **소스 코드만 공개**합니다. NuGet 패키지, .NET 런타임,
-`uiohook.dll`, 실행 파일, PDB는 Git에 포함하지 않습니다.
+이 저장소는 소스 코드를 공개하며 GitHub Release에서 Windows x64 self-contained
+설치 파일과 portable ZIP도 제공합니다. NuGet 패키지와 생성 바이너리는 Git에
+커밋하지 않고 Release 빌드에서 잠금 파일에 기록된 버전으로 복원합니다.
 
-## NuGet 의존성
+## Release에 동봉하는 고지와 소스
+
+각 바이너리 배포물에는 다음 항목이 들어갑니다.
+
+- 프로젝트 `LICENSE.txt`와 이 `THIRD_PARTY_NOTICES.md`
+- `licenses/` 아래 ScreenRecorderLib, SharpHook, libuiohook, Inno Setup 라이선스
+- `licenses/dotnet/` 아래 실제 배포된 .NET Runtime 팩과 Windows Desktop Runtime
+  팩의 버전별 라이선스·제3자 고지
+- `licenses/corresponding-source/SharpHook-7.1.3-Corresponding-Source.zip`
+
+대응 소스 ZIP은 SharpHook `v7.1.3`과 그 버전이 고정한 libuiohook 서브모듈 전체를
+포함합니다. 같은 파일을 GitHub Release의 독립 asset으로도 제공합니다.
+
+## NuGet 런타임 의존성
 
 ### ScreenRecorderLib 6.6.0
 
@@ -22,8 +36,8 @@
   <https://github.com/TolikPylypchuk/SharpHook/tree/bcb41a4b4a1901ef6c3d4de129e273c8bdafbbd4>
 - 전문: [`licenses/SharpHook-MIT.txt`](licenses/SharpHook-MIT.txt)
 
-SharpHook는 네이티브 라이브러리 **libuiohook**를 래핑합니다. SharpHook
-7.1.3의 소스 커밋이 가리키는 libuiohook 버전은
+SharpHook는 네이티브 라이브러리 **libuiohook**를 래핑합니다. SharpHook 7.1.3이
+가리키는 libuiohook 커밋은
 `104624bfd3c69e558e56fd8aff11ea61bc24b224`이며 LGPL-3.0-or-later입니다.
 
 - 정확한 소스:
@@ -33,32 +47,61 @@ SharpHook는 네이티브 라이브러리 **libuiohook**를 래핑합니다. Sha
 - LGPL이 참조하는 GPL 전문:
   [`licenses/libuiohook-GPL-3.0.txt`](licenses/libuiohook-GPL-3.0.txt)
 
-이 저장소를 바탕으로 실행 파일을 다시 배포할 때에는 LGPL 조건을 별도로
-검토해야 합니다. 최소한 라이선스 전문과 저작권 고지를 동봉하고, 배포한
-libuiohook의 정확한 대응 소스를 제공하며, 사용자가 수정 버전으로 교체하거나
-재링크할 수 있는 조건을 방해하지 않아야 합니다. 이 저장소는 그 검토가 끝나지
-않은 바이너리를 공개 릴리스로 제공하지 않습니다.
+Release는 단일 파일 합성이나 native trimming을 사용하지 않습니다. `uiohook.dll`은
+EXE 옆의 독립 파일로 배포되어 사용자가 ABI 호환 수정 버전으로 교체할 수 있으며,
+설치 프로그램도 그 교체를 기술적으로 막지 않습니다. 정확한 대응 소스와 라이선스
+전문을 배포물 안에 함께 넣어 LGPL 재배포 조건을 충족하도록 구성했습니다.
+
+### 테스트 전용 의존성
+
+다음 패키지는 `tests/Series4.Desktop.Tests`에서만 사용하며 런타임 배포물에는
+포함하지 않습니다.
+
+- Microsoft.NET.Test.Sdk 18.8.1 — MIT — <https://github.com/microsoft/vstest>
+- xunit 2.9.3 — Apache-2.0 — <https://github.com/xunit/xunit>
+- xunit.runner.visualstudio 3.1.5 — Apache-2.0 — <https://github.com/xunit/visualstudio.xunit>
 
 ## .NET
 
-소스 빌드는 Microsoft .NET SDK를 사용합니다. 이 저장소에는 .NET 런타임
-바이너리가 없습니다. 향후 self-contained 실행 파일을 배포하면 해당 .NET
-Runtime/WPF 버전의 MIT 라이선스 및 `THIRD-PARTY-NOTICES`를 배포물에 함께
-넣어야 합니다.
+Release는 .NET 10 Windows Desktop Runtime을 self-contained 형태로 포함합니다.
+빌드에 사용된 .NET 루트의 `LICENSE.txt`와 `ThirdPartyNotices.txt`를 그대로
+`licenses/dotnet/`에 복사합니다. 일반 사용자는 .NET을 별도로 설치할 필요가 없습니다.
+
+## Inno Setup 6.7.3
+
+설치 EXE는 Inno Setup 6.7.3으로 만듭니다. Inno Setup의 원 저작자를 앱의 저작자로
+표현하지 않으며 라이선스 전문을 [`licenses/Inno-Setup.txt`](licenses/Inno-Setup.txt)에
+동봉합니다. Inno Setup은 설치 파일을 만드는 빌드 도구이며 portable ZIP에는
+해당 설치 런타임이 들어가지 않습니다.
+
+## Microsoft Visual C++ x64 Runtime 선행조건
+
+ScreenRecorderLib 6.6.0의 네이티브 DLL은 `CONCRT140.dll`, `MSVCP140.dll`,
+`VCRUNTIME140.dll`, `VCRUNTIME140_1.dll`을 사용합니다. 이 프로젝트는 Visual C++
+Redistributable이나 개별 Microsoft CRT DLL을 Release에 포함하지 않습니다.
+
+설치 프로그램은 대상 PC에 x64 Runtime이 없을 때 Microsoft 공식 주소
+`https://aka.ms/vc14/vc_redist.x64.exe`에서 직접 내려받고, Windows가 확인한
+Authenticode 서명의 발급 대상이 Microsoft인지 검사한 뒤 Microsoft 설치 프로그램을
+실행합니다. 따라서 이 저장소가 Microsoft 바이너리를 재배포하지 않습니다. ZIP형은
+해당 런타임이 이미 설치된 PC를 전제로 합니다.
+
+- Microsoft 공식 안내:
+  <https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist>
 
 ## 안내 이미지
 
-`docs/assets/series4-comic/`의 고양이 안내 이미지는 이 프로젝트를 위해 새로
-생성한 결과물입니다. 참고 이미지의 파일·캐릭터·문구·로고는 저장소에 포함하지
-않았고, 생성 결과의 한글 제목과 설명은 프로젝트 스크립트로 별도 합성했습니다.
+`docs/assets/series4-comic/`의 고양이 안내 이미지는 이 프로젝트를 위해 새로 생성한
+결과물입니다. 참고 이미지의 파일·캐릭터·문구·로고는 저장소에 포함하지 않았고,
+생성 결과의 한글 제목과 설명은 프로젝트 스크립트로 별도 합성했습니다.
 
 OpenAI 이용약관은 적용 법률이 허용하는 범위에서 이용자가 출력물을 소유한다고
-정하지만, AI 출력은 고유하지 않을 수 있다고도 밝힙니다. 따라서 공개 전 사람의
-유사성 검토를 거쳤고, 알려진 제3자 로고·상표·서명은 넣지 않았습니다.
+정하지만 AI 출력은 고유하지 않을 수 있다고도 밝힙니다. 공개 전 사람의 유사성
+검토를 거쳤고 알려진 제3자 로고·상표·서명은 넣지 않았습니다.
 
 - OpenAI Terms of Use: <https://openai.com/policies/terms-of-use/>
 
 ## 이 프로젝트 자체의 라이선스
 
-별도 표시된 제3자 구성요소를 제외한 이 저장소의 소스, 문서, 프로젝트 전용
-이미지는 루트 [`LICENSE`](LICENSE)의 MIT 조건으로 제공합니다.
+별도 표시된 제3자 구성요소를 제외한 이 저장소의 소스, 문서, 프로젝트 전용 이미지는
+루트 [`LICENSE`](LICENSE)의 MIT 조건으로 제공합니다.

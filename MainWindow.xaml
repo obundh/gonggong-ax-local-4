@@ -51,6 +51,7 @@
                                   Width="76"
                                   Height="30"
                                   Padding="7,0"
+                                  ToolTip="키보드 입력이 포함된 매크로는 외부 대상 창을 선택할 수 있도록 최소 3초를 적용합니다."
                                   SelectedIndex="1">
                             <ComboBoxItem Tag="0" Content="즉시" />
                             <ComboBoxItem Tag="3" Content="3초" />
@@ -222,7 +223,7 @@
 
                         <Button x:Name="RunMacroButton"
                                 Grid.Column="1"
-                                Width="112"
+                                MinWidth="132"
                                 Height="36"
                                 Margin="10,0,0,0"
                                 VerticalAlignment="Center"
@@ -234,6 +235,7 @@
                                 Cursor="Hand"
                                 FontWeight="SemiBold"
                                 Foreground="#027A48"
+                                ToolTip="경고는 실행을 막지 않습니다. 클릭하면 선택한 시작 지연 후 바로 실행합니다."
                                 Content="▶ 매크로 실행" />
 
                         <Button x:Name="StopMacroButton"
@@ -320,7 +322,7 @@
                         <RowDefinition Height="58" />
                         <RowDefinition Height="*" />
                         <RowDefinition Height="238" />
-                        <RowDefinition Height="40" />
+                        <RowDefinition Height="52" />
                     </Grid.RowDefinitions>
 
                     <Grid Margin="18,0">
@@ -334,16 +336,40 @@
                                        FontWeight="SemiBold"
                                        Foreground="#20242A"
                                        Text="이벤트 로그" />
-                            <Border Margin="8,0,0,0"
-                                    Padding="8,2"
-                                    Background="#EEF4FF"
+                             <Border Margin="8,0,0,0"
+                                     Padding="8,2"
+                                     Background="#EEF4FF"
                                     CornerRadius="10">
                                 <TextBlock x:Name="EventCountText"
                                            FontSize="11"
                                            FontWeight="SemiBold"
                                            Foreground="#175CD3"
-                                           Text="0" />
-                            </Border>
+                                            Text="0" />
+                             </Border>
+                             <Border x:Name="WarningCountBadge"
+                                     Margin="6,0,0,0"
+                                     Padding="8,2"
+                                     Background="#FFFAEB"
+                                     CornerRadius="10"
+                                     Visibility="Collapsed">
+                                 <TextBlock x:Name="WarningCountText"
+                                            FontSize="10"
+                                            FontWeight="SemiBold"
+                                            Foreground="#B54708"
+                                            Text="확인 0" />
+                             </Border>
+                             <Border x:Name="BlockedCountBadge"
+                                     Margin="6,0,0,0"
+                                     Padding="8,2"
+                                     Background="#FEF3F2"
+                                     CornerRadius="10"
+                                     Visibility="Collapsed">
+                                 <TextBlock x:Name="BlockedCountText"
+                                            FontSize="10"
+                                            FontWeight="SemiBold"
+                                            Foreground="#B42318"
+                                            Text="실행 불가 0" />
+                             </Border>
                         </StackPanel>
                         <StackPanel Grid.Column="1"
                                     VerticalAlignment="Center"
@@ -440,13 +466,47 @@
                                                      <TextBlock FontSize="9"
                                                                 FontWeight="Bold"
                                                                 Foreground="#B42318"
-                                                                Text="격리" />
+                                                                Text="실행 불가" />
+                                                 </Border>
+                                                 <Border x:Name="ReviewWarningBadge"
+                                                         Margin="6,0,0,0"
+                                                         Padding="5,1"
+                                                         Background="#FFFAEB"
+                                                         CornerRadius="6"
+                                                         ToolTip="{Binding ReviewWarningText}"
+                                                         Visibility="Collapsed">
+                                                     <TextBlock FontSize="9"
+                                                                FontWeight="Bold"
+                                                                Foreground="#B54708"
+                                                                Text="추가 확인" />
                                                  </Border>
                                             </StackPanel>
                                             <TextBlock FontSize="12"
                                                        Foreground="#344054"
                                                        Text="{Binding Message}"
                                                        TextWrapping="Wrap" />
+                                            <TextBlock x:Name="ReviewWarningTextBlock"
+                                                       Margin="0,4,0,0"
+                                                       FontSize="10"
+                                                       Foreground="#B54708"
+                                                       Text="{Binding ReviewWarningText}"
+                                                       TextWrapping="Wrap"
+                                                       Visibility="Collapsed" />
+                                            <TextBlock x:Name="QuarantineReasonTextBlock"
+                                                       Margin="0,4,0,0"
+                                                       FontSize="10"
+                                                       Foreground="#B42318"
+                                                       Text="{Binding QuarantineReason}"
+                                                       TextWrapping="Wrap"
+                                                       Visibility="Collapsed" />
+                                            <TextBlock x:Name="ExecutionResultTextBlock"
+                                                       Margin="0,4,0,0"
+                                                       FontSize="10"
+                                                       FontWeight="SemiBold"
+                                                       Foreground="#027A48"
+                                                       Text="{Binding LastExecutionResult}"
+                                                       TextWrapping="Wrap"
+                                                       Visibility="Collapsed" />
                                         </StackPanel>
                                         <Button Grid.Column="2"
                                                 Width="24"
@@ -529,6 +589,30 @@
                                          <Setter TargetName="EventBubble"
                                                  Property="BorderBrush"
                                                  Value="#FDA29B" />
+                                         <Setter TargetName="QuarantineReasonTextBlock"
+                                                 Property="Visibility"
+                                                 Value="Visible" />
+                                     </DataTrigger>
+                                     <DataTrigger Binding="{Binding HasReviewWarning}" Value="True">
+                                         <Setter TargetName="ReviewWarningBadge"
+                                                 Property="Visibility"
+                                                 Value="Visible" />
+                                         <Setter TargetName="ReviewWarningTextBlock"
+                                                 Property="Visibility"
+                                                 Value="Visible" />
+                                         <Setter TargetName="EventBubble"
+                                                 Property="BorderBrush"
+                                                 Value="#FEDF89" />
+                                     </DataTrigger>
+                                     <DataTrigger Binding="{Binding HasExecutionResult}" Value="True">
+                                         <Setter TargetName="ExecutionResultTextBlock"
+                                                 Property="Visibility"
+                                                 Value="Visible" />
+                                     </DataTrigger>
+                                     <DataTrigger Binding="{Binding LastExecutionFailed}" Value="True">
+                                         <Setter TargetName="ExecutionResultTextBlock"
+                                                 Property="Foreground"
+                                                 Value="#B42318" />
                                      </DataTrigger>
                                  </DataTemplate.Triggers>
                             </DataTemplate>
@@ -675,11 +759,13 @@
                     <Border Grid.Row="3"
                             BorderBrush="#E4E7EC"
                             BorderThickness="0,1,0,0">
-                        <TextBlock Margin="18,0"
+                        <TextBlock Margin="18,6"
                                    VerticalAlignment="Center"
                                    FontSize="11"
                                    Foreground="#667085"
-                                   Text="로그 클릭: 수정 · ↑↓: 순서 변경 · ×: 삭제" />
+                                   LineHeight="15"
+                                   TextWrapping="Wrap"
+                                   Text="경고는 실행을 막지 않습니다 · 로그 클릭: 수정 · ↑↓: 순서 변경 · ×: 삭제" />
                     </Border>
                         </Grid>
                     </TabItem>
