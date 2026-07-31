@@ -13,6 +13,9 @@ public sealed class RecordedEvent : INotifyPropertyChanged
     private MacroActionKind actionKind;
     private bool isQuarantined;
     private string? quarantineReason;
+    private string? reviewWarningText;
+    private string? lastExecutionResult;
+    private bool lastExecutionFailed;
 
     public required TimeSpan Offset
     {
@@ -131,6 +134,59 @@ public sealed class RecordedEvent : INotifyPropertyChanged
             OnPropertyChanged();
         }
     }
+
+    public string? ReviewWarningText
+    {
+        get => reviewWarningText;
+        set
+        {
+            if (reviewWarningText == value)
+            {
+                return;
+            }
+
+            reviewWarningText = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(HasReviewWarning));
+        }
+    }
+
+    public bool HasReviewWarning =>
+        !string.IsNullOrWhiteSpace(ReviewWarningText);
+
+    public string? LastExecutionResult
+    {
+        get => lastExecutionResult;
+        set
+        {
+            if (lastExecutionResult == value)
+            {
+                return;
+            }
+
+            lastExecutionResult = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(HasExecutionResult));
+        }
+    }
+
+    public bool LastExecutionFailed
+    {
+        get => lastExecutionFailed;
+        set
+        {
+            if (lastExecutionFailed == value)
+            {
+                return;
+            }
+
+            lastExecutionFailed = value;
+            OnPropertyChanged();
+        }
+    }
+
+    public bool HasExecutionResult =>
+        !string.IsNullOrWhiteSpace(LastExecutionResult);
 
     public long Sequence { get; set; }
 

@@ -18,7 +18,7 @@
 - 실행 중 `Ctrl + Shift + F12`로 긴급 중지
 - 날짜별 기록 저장소에서 이전 영상과 이벤트 불러오기
 
-녹화 영상과 이벤트 JSON은 날짜별 폴더에 함께 저장됩니다. 기록이 완전히 끝나지 않았거나 안전 검사가 필요한 이벤트는 실행 대상에서 격리될 수 있습니다.
+녹화 영상과 이벤트 JSON은 날짜별 폴더에 함께 저장됩니다. 미완료 녹화, 영상 길이 밖 시점, 화면 크기 변화, 창 전환 키, 민감정보 의심 항목은 경고로 표시하지만 실행을 막지 않습니다. 깨진 입력 데이터나 현재 엔진이 재생할 수 없는 동작만 개별 실행 대상에서 제외됩니다.
 
 ## 먼저 알아야 할 점
 
@@ -27,11 +27,12 @@
 - Windows x64 전용 WPF 프로젝트입니다.
 - 프로젝트와 전역 입력 훅 충돌을 막기 위해 한 사용자 세션에서 한 인스턴스만 실행합니다.
 - 현재 주 모니터 한 대만 녹화합니다.
-- 마우스 이동 경로와 드래그는 실행하지 않습니다. 드래그로 의심되는 이벤트는 기록에 남기되 격리합니다.
-- 녹화할 때와 실행할 때 주 모니터의 위치·해상도가 달라지면 좌표 이벤트 실행을 보류합니다.
+- 마우스 이동 경로와 드래그는 아직 실행하지 않습니다. 드래그 이벤트는 기록과 영상 오버레이에 남고 `실행 불가` 이유를 표시합니다.
+- 녹화할 때와 실행할 때 주 모니터의 위치·해상도가 다르면 경고를 표시한 뒤 기존 절대 좌표로 실행합니다.
 - 관리자 권한으로 실행된 프로그램은 일반 권한으로 실행한 이 앱이 조작하지 못할 수 있습니다.
 - 화면 전환을 기다리는 조건, OCR, OpenCV 기반 요소 탐색, 분기와 재시도는 아직 없습니다.
-- 영상과 입력 이벤트에는 개인정보나 비밀 정보가 포함될 수 있습니다. 자동 마스킹이나 암호화 저장 기능은 현재 없습니다.
+- 이벤트 오버레이는 앱에서 영상을 재생할 때 JSON 로그와 함께 표시됩니다. 현재 MP4 파일 자체에 주석을 합성해 내보내지는 않습니다.
+- 영상과 입력 이벤트에는 개인정보나 비밀 정보가 포함될 수 있습니다. 텍스트 이벤트는 로컬 규칙으로 의심 형식을 표시하지만, 영상 자동 마스킹이나 암호화 저장 기능은 현재 없습니다.
 
 중요한 업무에 바로 적용하기 전에 테스트용 문서와 테스트 계정에서 충분히 검증하세요.
 
@@ -47,8 +48,9 @@
 
 ```powershell
 dotnet --version
-dotnet restore .\Series4.Desktop.csproj --locked-mode
-dotnet build .\Series4.Desktop.csproj -c Release -p:Platform=x64
+dotnet restore .\tests\Series4.Desktop.Tests\Series4.Desktop.Tests.csproj --locked-mode
+dotnet build .\Series4.Desktop.csproj -c Release -p:Platform=x64 --no-restore
+dotnet test .\tests\Series4.Desktop.Tests\Series4.Desktop.Tests.csproj -c Release -p:Platform=x64 --no-restore
 ```
 
 개발 상태로 바로 실행하려면:
@@ -89,13 +91,15 @@ Series4.Desktop/
 ├─ MainWindow.xaml              # 화면 구성
 ├─ MainWindow.xaml.cs           # 녹화·편집·실행 흐름
 ├─ RecordedEvent.cs             # 타임라인 이벤트 모델
+├─ MacroEventPolicy.cs          # 경고와 기술적 실행 불가 판정
 ├─ MacroActionKind.cs           # 실행 동작 종류
 ├─ MacroProjectStore.cs         # JSON sidecar와 날짜별 저장소
 ├─ MacroProjectSummary.cs       # 과거 기록 목록 모델
-└─ docs/
-   ├─ BEGINNER_GUIDE.md
-   ├─ ARCHITECTURE.md
-   └─ PRIVACY_AND_SECURITY.md
+├─ docs/
+│  ├─ BEGINNER_GUIDE.md
+│  ├─ ARCHITECTURE.md
+│  └─ PRIVACY_AND_SECURITY.md
+└─ tests/Series4.Desktop.Tests/ # 경고·실행 정책 회귀 테스트
 ```
 
 ## 라이선스와 외부 구성요소
@@ -104,7 +108,8 @@ Series4.Desktop/
 
 ## 기여할 때
 
-- 실제 사용자 입력을 전송하는 코드는 안전 중지와 격리 정책을 우회하지 않아야 합니다.
+- 경고는 사용자의 실행 선택을 막지 않아야 하며, 기술적으로 실행할 수 없는 개별 이벤트만 제외해야 합니다.
+- 긴급 중지와 입력 상태 정리 실패는 전체 실행 중지 조건으로 유지하세요.
 - 저장 포맷을 바꿀 때는 기존 `.series4.json`을 읽을 수 있는지 확인하세요.
 - 녹화·실행·저장 실패를 성공으로 표시하지 마세요.
 - 실제 환경에서 검증하지 않은 동작은 문서에서 검증 완료라고 표현하지 마세요.

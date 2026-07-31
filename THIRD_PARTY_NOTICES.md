@@ -39,6 +39,15 @@ libuiohook의 정확한 대응 소스를 제공하며, 사용자가 수정 버�
 재링크할 수 있는 조건을 방해하지 않아야 합니다. 이 저장소는 그 검토가 끝나지
 않은 바이너리를 공개 릴리스로 제공하지 않습니다.
 
+### 테스트 전용 의존성
+
+다음 패키지는 `tests/Series4.Desktop.Tests`에서만 사용하며 애플리케이션의 런타임
+배포물에는 포함하지 않습니다.
+
+- Microsoft.NET.Test.Sdk 18.8.1 — MIT — <https://github.com/microsoft/vstest>
+- xunit 2.9.3 — Apache-2.0 — <https://github.com/xunit/xunit>
+- xunit.runner.visualstudio 3.1.5 — Apache-2.0 — <https://github.com/xunit/visualstudio.xunit>
+
 ## .NET
 
 소스 빌드는 Microsoft .NET SDK를 사용합니다. 이 저장소에는 .NET 런타임

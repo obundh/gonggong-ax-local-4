@@ -558,6 +558,11 @@ public static class MacroProjectStore
                 nameof(RecordedEventDto.QuarantineReason),
                 null
             ),
+            ReviewWarningText = GetOptionalProperty<string?>(
+                recordedEvent,
+                nameof(RecordedEventDto.ReviewWarningText),
+                null
+            ),
             Sequence = recordedEvent.Sequence,
             ScreenX = recordedEvent.ScreenX,
             ScreenY = recordedEvent.ScreenY,
@@ -641,6 +646,11 @@ public static class MacroProjectStore
             recordedEvent,
             nameof(RecordedEventDto.QuarantineReason),
             dto.QuarantineReason
+        );
+        SetOptionalProperty(
+            recordedEvent,
+            nameof(RecordedEventDto.ReviewWarningText),
+            dto.ReviewWarningText
         );
         return recordedEvent;
     }
@@ -845,6 +855,8 @@ public sealed class RecordedEventDto
     public bool IsQuarantined { get; set; }
 
     public string? QuarantineReason { get; set; }
+
+    public string? ReviewWarningText { get; set; }
 
     public long Sequence { get; set; }
 
