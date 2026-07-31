@@ -113,7 +113,7 @@ jobs:
           $smokeRoot = Join-Path $env:RUNNER_TEMP "공공 AX smoke"
           $portableRoot = Join-Path $smokeRoot "portable"
           $installDir = Join-Path $smokeRoot "설치 경로"
-          New-Item -ItemType Directory -Path $portableRoot -Force | Out-Null
+          New-Item -ItemType Directory -Path $smokeRoot -Force | Out-Null
 
           function Find-AppExecutable([string]$Root) {
             $runtimeConfigs = @(Get-ChildItem -LiteralPath $Root -Recurse -Filter "*.runtimeconfig.json" -File)
@@ -148,7 +148,10 @@ jobs:
           }
 
           $portableZip = Resolve-Path ".\artifacts\release\GonggongAX-Series4-Portable-x64-v$version.zip"
-          Expand-Archive -LiteralPath $portableZip.Path -DestinationPath $portableRoot -Force
+          [System.IO.Compression.ZipFile]::ExtractToDirectory(
+            $portableZip.Path,
+            $portableRoot
+          )
           $portableExe = Find-AppExecutable $portableRoot
           Assert-AppStarts $portableExe.FullName
 
