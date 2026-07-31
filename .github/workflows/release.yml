@@ -110,7 +110,7 @@ jobs:
           $ErrorActionPreference = "Stop"
           [xml]$project = Get-Content .\Series4.Desktop.csproj -Encoding UTF8
           $version = [string]($project.Project.PropertyGroup.Version | Select-Object -First 1)
-          $smokeRoot = Join-Path $env:RUNNER_TEMP "series4-smoke"
+          $smokeRoot = Join-Path $env:RUNNER_TEMP "공공 AX smoke"
           $portableRoot = Join-Path $smokeRoot "portable"
           $installDir = Join-Path $smokeRoot "설치 경로"
           New-Item -ItemType Directory -Path $portableRoot -Force | Out-Null
@@ -223,11 +223,18 @@ jobs:
           $ErrorActionPreference = "Stop"
           $tag = $env:GITHUB_REF_NAME
           $assets = @(Get-ChildItem .\artifacts\release -File | ForEach-Object FullName)
+          $currentAssetNames = @($assets | ForEach-Object { Split-Path -Leaf $_ })
           $title = "공공 AX 업무 매크로 $tag · Windows x64"
           $existingDraft = gh release view $tag --json isDraft --jq '.isDraft' 2>$null
           if ($LASTEXITCODE -eq 0) {
             if ($existingDraft -ne "true") {
               throw "Release $tag is already public; refusing to replace its assets."
+            }
+            $existingAssetNames = @(gh release view $tag --json assets --jq '.assets[].name')
+            if ($LASTEXITCODE -ne 0) { throw "Draft release asset listing failed." }
+            $staleAssetNames = @($existingAssetNames | Where-Object { $currentAssetNames -notcontains $_ })
+            if ($staleAssetNames.Count -gt 0) {
+              throw "Draft release contains stale assets outside this build: $($staleAssetNames -join ', ')"
             }
             gh release upload $tag @assets --clobber
             if ($LASTEXITCODE -ne 0) { throw "Draft release asset upload failed." }
