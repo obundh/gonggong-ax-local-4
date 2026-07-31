@@ -148,10 +148,7 @@ jobs:
           }
 
           $portableZip = Resolve-Path ".\artifacts\release\GonggongAX-Series4-Portable-x64-v$version.zip"
-          tar.exe -xf $portableZip -C $portableRoot
-          if ($LASTEXITCODE -ne 0) {
-            throw "Portable archive extraction failed."
-          }
+          Expand-Archive -LiteralPath $portableZip.Path -DestinationPath $portableRoot -Force
           $portableExe = Find-AppExecutable $portableRoot
           Assert-AppStarts $portableExe.FullName
 
