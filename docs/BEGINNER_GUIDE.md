@@ -5,11 +5,11 @@
 ## 1. 설치하기
 
 1. [최신 Release](https://github.com/obundh/gonggong-ax-local-4/releases/latest)를 엽니다.
-2. `GonggongAX-Series4-Setup-x64-v4.1.0.exe`를 받습니다.
+2. `GonggongAX-Series4-Setup-x64-v4.1.1.exe`를 받습니다.
 3. 설치 후 시작 메뉴의 `공공 AX 업무 매크로`를 엽니다.
 
 처음 쓰는 분은 필요한 구성 요소를 자동으로 준비하는 Setup 설치파일을 권장합니다.
-`GonggongAX-Series4-Portable-x64-v4.1.0.zip`을 사용하는 경우에는 Microsoft
+`GonggongAX-Series4-Portable-x64-v4.1.1.zip`을 사용하는 경우에는 Microsoft
 Visual C++ 2015-2022 x64 Runtime을 먼저 설치한 뒤 ZIP 전체를 새 폴더에 압축
 해제하고 `공공AX-업무매크로.exe`를 실행하세요. `Source code` ZIP은 설치 파일이
 아닙니다.
@@ -31,7 +31,7 @@ Visual C++ 2015-2022 x64 Runtime을 먼저 설치한 뒤 ZIP 전체를 새 폴�
 
 ## 3. 메모장으로 바로 시험하기
 
-이 순서는 실제 v4.1.0 검증에 사용한 방식입니다.
+이 순서는 실제 v4.1.1 검증에 사용한 방식입니다.
 
 ### 기록
 

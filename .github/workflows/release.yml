@@ -130,9 +130,21 @@ jobs:
 
           function Assert-AppStarts([string]$Executable) {
             $process = Start-Process -FilePath $Executable -WorkingDirectory (Split-Path $Executable) -PassThru
-            Start-Sleep -Seconds 5
-            if ($process.HasExited) {
-              throw "Application exited during startup smoke test with code $($process.ExitCode): $Executable"
+            $windowDeadline = [DateTime]::UtcNow.AddSeconds(30)
+            do {
+              if ($process.HasExited) {
+                throw "Application exited during startup smoke test with code $($process.ExitCode): $Executable"
+              }
+              $process.Refresh()
+              if ($process.MainWindowHandle -ne [IntPtr]::Zero) {
+                break
+              }
+              Start-Sleep -Milliseconds 500
+            } while ([DateTime]::UtcNow -lt $windowDeadline)
+
+            if ($process.MainWindowHandle -eq [IntPtr]::Zero) {
+              Stop-Process -Id $process.Id -Force
+              throw "Application did not expose a main window within 30 seconds: $Executable"
             }
             if (-not $process.CloseMainWindow()) {
               Stop-Process -Id $process.Id -Force

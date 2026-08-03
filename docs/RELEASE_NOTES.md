@@ -1,7 +1,7 @@
-## v4.1.0 경량판
+## v4.1.1 경량판
 
-처음 설치하는 분은 Assets에서 `GonggongAX-Series4-Setup-x64-v4.1.0.exe` 하나를
-받으면 됩니다. 압축형은 `GonggongAX-Series4-Portable-x64-v4.1.0.zip`입니다.
+처음 설치하는 분은 Assets에서 `GonggongAX-Series4-Setup-x64-v4.1.1.exe` 하나를
+받으면 됩니다. 압축형은 `GonggongAX-Series4-Portable-x64-v4.1.1.zip`입니다.
 GitHub가 자동으로 붙이는 `Source code` ZIP은 실행 프로그램이 아닙니다.
 
 ### 달라진 사용 흐름
