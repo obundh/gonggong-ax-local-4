@@ -27,5 +27,5 @@ jobs:
       - name: Build
         run: dotnet build .\Series4.Desktop.csproj -c Release -p:Platform=x64 --no-restore -warnaserror
 
-      - name: Test macro policy
+      - name: Test macro engine
         run: dotnet test .\tests\Series4.Desktop.Tests\Series4.Desktop.Tests.csproj -c Release -p:Platform=x64 --no-restore --logger "console;verbosity=normal"

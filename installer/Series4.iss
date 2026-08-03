@@ -1,5 +1,5 @@
 #ifndef AppVersion
-  #define AppVersion "4.0.1"
+  #define AppVersion "4.1.0"
 #endif
 
 #ifndef SourceDir
@@ -26,7 +26,10 @@ AppSupportURL={#AppUrl}/issues
 AppUpdatesURL={#AppUrl}/releases/latest
 DefaultDirName={localappdata}\Programs\GonggongAX\Series4
 DefaultGroupName={#AppName}
+DisableWelcomePage=yes
+DisableDirPage=yes
 DisableProgramGroupPage=yes
+DisableReadyPage=yes
 PrivilegesRequired=lowest
 ArchitecturesAllowed=x64os
 ArchitecturesInstallIn64BitMode=x64os
@@ -42,7 +45,6 @@ RestartApplications=no
 AppMutex=Local\GonggongAX.Series4.Desktop
 UninstallDisplayIcon={app}\{#AppExeName}
 AppReadmeFile={app}\README-FIRST.txt
-LicenseFile={#SourceDir}\LICENSE.txt
 VersionInfoVersion={#AppVersion}
 VersionInfoCompany={#AppPublisher}
 VersionInfoDescription={#AppName} 설치 프로그램
@@ -53,15 +55,12 @@ VersionInfoProductVersion={#AppVersion}
 Name: "korean"; MessagesFile: "compiler:Languages\Korean.isl"
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
-[Tasks]
-Name: "desktopicon"; Description: "바탕 화면 바로가기 만들기"; GroupDescription: "추가 바로가기:"; Flags: unchecked
-
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"
-Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"
 
 [Run]
 Filename: "{app}\{#AppExeName}"; Description: "{#AppName} 실행"; WorkingDir: "{app}"; Flags: nowait postinstall skipifsilent
@@ -118,18 +117,7 @@ begin
   Result := '';
   if not IsVcRuntimeInstalled then
   begin
-    if MsgBox(
-      '화면 녹화에 필요한 Microsoft Visual C++ x64 런타임이 없습니다.' + #13#10 +
-      'Microsoft 공식 서버에서 내려받아 설치합니다. 이 단계에서만 관리자 승인 창이 나타날 수 있습니다.' + #13#10#13#10 +
-      '계속하시겠습니까?',
-      mbConfirmation,
-      MB_YESNO
-    ) <> IDYES then
-    begin
-      Result := 'Microsoft Visual C++ x64 런타임 설치가 필요합니다. 설치를 취소했습니다.';
-      Exit;
-    end;
-
+    Log('Microsoft Visual C++ x64 런타임이 없어 공식 설치 파일을 자동으로 준비합니다.');
     RedistPath := ExpandConstant('{tmp}\vc_redist.x64.exe');
     try
       DownloadTemporaryFile(VcRuntimeUrl, 'vc_redist.x64.exe', '', nil);
@@ -149,9 +137,9 @@ begin
 
     if not Exec(
       RedistPath,
-      '/install /passive /norestart',
+      '/install /quiet /norestart',
       '',
-      SW_SHOWNORMAL,
+      SW_HIDE,
       ewWaitUntilTerminated,
       ExitCode
     ) then
@@ -176,10 +164,7 @@ begin
   end;
 
   if not FileExists(ExpandConstant('{sys}\mfplat.dll')) then
-    MsgBox(
-      '이 Windows에는 Media Foundation이 없어 화면 녹화가 작동하지 않을 수 있습니다.' + #13#10 +
-      'Windows N/KN은 설정의 선택적 기능에서 Media Feature Pack을 설치하세요.',
-      mbInformation,
-      MB_OK
+    Log(
+      'Media Foundation을 찾지 못했습니다. Windows N/KN에서는 화면 녹화를 위해 Media Feature Pack이 필요할 수 있습니다.'
     );
 end;

@@ -48,6 +48,12 @@ public static class MacroEventPolicy
                 "실행할 키 정보가 비어 있습니다.",
             MacroActionKind.MouseWheel when recordedEvent.WheelRotation == 0 =>
                 "휠 이동량이 0입니다.",
+            MacroActionKind.MouseDrag
+                when recordedEvent.DragButton is null =>
+                "드래그 버튼 정보가 없습니다.",
+            MacroActionKind.MouseDrag
+                when recordedEvent.MousePath.Length < 2 =>
+                "드래그 경로가 없습니다.",
             _ => null,
         };
         if (invalidPayloadReason is not null)
@@ -189,6 +195,7 @@ public static class MacroEventPolicy
             is MacroActionKind.MouseLeftClick
                 or MacroActionKind.MouseRightClick
                 or MacroActionKind.MouseMiddleClick
+                or MacroActionKind.MouseDrag
                 or MacroActionKind.MouseWheel;
     }
 
