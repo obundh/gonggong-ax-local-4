@@ -23,11 +23,11 @@ Windows에서 평소 하던 업무를 한 번 시연하고 그대로 다시 실�
 ## 설치
 
 1. [최신 GitHub Release](https://github.com/obundh/gonggong-ax-local-4/releases/latest)를 엽니다.
-2. Assets에서 `GonggongAX-Series4-Setup-x64-v4.1.0.exe`를 받습니다.
+2. Assets에서 `GonggongAX-Series4-Setup-x64-v4.1.1.exe`를 받습니다.
 3. 설치 후 시작 메뉴에서 `공공 AX 업무 매크로`를 실행합니다.
 
 초보자는 필요한 구성 요소를 자동으로 준비하는 Setup 설치파일을 권장합니다. 설치 없이
-쓰려면 `GonggongAX-Series4-Portable-x64-v4.1.0.zip`을 받아 새 폴더에 모두 압축
+쓰려면 `GonggongAX-Series4-Portable-x64-v4.1.1.zip`을 받아 새 폴더에 모두 압축
 해제하세요. 포터블판은 Microsoft Visual C++ 2015-2022 x64 Runtime이 PC에 이미
 설치되어 있어야 합니다. GitHub의 `Source code (zip)`은 실행 프로그램이 아닙니다.
 
@@ -64,7 +64,7 @@ Windows에서 평소 하던 업무를 한 번 시연하고 그대로 다시 실�
 
 ## 실제 동작 검증
 
-v4.1.0 경량 흐름은 외부 Windows 프로그램에서 다음 순서로 확인했습니다.
+v4.1.1 경량 흐름은 외부 Windows 프로그램에서 다음 순서로 확인했습니다.
 
 - **메모장:** 텍스트 입력 이벤트 `z9final7`을 빈 문서에 재생해 `성공 1 · 실패 0` 확인
 - **그림판:** 서로 다른 세 번의 드래그를 녹화한 뒤 빈 캔버스에서 세 획 재생 확인
@@ -117,7 +117,7 @@ JSON에는 키, 좌표, 드래그 경로와 시간이 들어 있습니다. 영�
 Release의 `SHA256SUMS.txt`와 받은 파일의 SHA-256을 비교할 수 있습니다.
 
 ```powershell
-Get-FileHash .\GonggongAX-Series4-Setup-x64-v4.1.0.exe -Algorithm SHA256
+Get-FileHash .\GonggongAX-Series4-Setup-x64-v4.1.1.exe -Algorithm SHA256
 ```
 
 ## 개발자용 빌드
