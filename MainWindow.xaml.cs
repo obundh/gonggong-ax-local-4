@@ -5,7 +5,6 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Data;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Threading;
@@ -68,12 +67,16 @@ public partial class MainWindow : Window
     private readonly EventSimulator eventSimulator = new();
     private readonly SemaphoreSlim projectSaveGate = new(1, 1);
 
-    private TaskPoolGlobalHook? globalHook;
+    private SimpleGlobalHook? globalHook;
+    private Task? globalHookRunTask;
+    private TaskCompletionSource<bool>? globalHookReadySource;
+    private EventHandler<HookEventArgs>? globalHookEnabledHandler;
+    private CancellationTokenSource? globalHookStopRequest;
+    private OrderedAsyncDrainQueue<HookEventSnapshot>? hookEventQueue;
     private Recorder? recorder;
     private CancellationTokenSource? macroCancellation;
     private Task? macroExecutionTask;
     private CancellationTokenSource? recordingPreparationCancellation;
-    private CancellationTokenSource? projectLibraryRefreshCancellation;
     private HwndSource? windowSource;
     private string? currentVideoPath;
     private string? pendingVideoPath;
@@ -81,6 +84,7 @@ public partial class MainWindow : Window
     private string? macroRunPreparationWarning;
     private bool isRecording;
     private bool isPreparingRecording;
+    private bool isStartingEventCapture;
     private bool eventCaptureStarted;
     private bool recordingSessionCommitted;
     private bool isFinalizing;
@@ -95,8 +99,6 @@ public partial class MainWindow : Window
     private bool closeRequested;
     private bool closeAfterSave;
     private bool isCompletingCloseRequest;
-    private bool isProjectLibraryLoading;
-    private bool isSwitchingProject;
     private IntPtr macroTargetWindow;
     private DateTimeOffset countdownEndsAt;
     private DateTimeOffset macroCountdownEndsAt;
@@ -108,25 +110,16 @@ public partial class MainWindow : Window
     private long projectRevision;
     private long lastCommittedProjectRevision = -1;
     private long recordingSessionId;
-    private bool isLoadingProject;
     private string? currentProjectPath;
     private MacroProjectStatus currentProjectStatus = MacroProjectStatus.Completed;
 
     public ObservableCollection<RecordedEvent> RecordedEvents { get; } = [];
-    public ObservableCollection<MacroProjectSummary> ProjectLibraryItems { get; } = [];
 
     public MainWindow()
     {
         InitializeComponent();
         DataContext = this;
         RefreshCaptureBounds();
-        var projectLibraryView = CollectionViewSource.GetDefaultView(
-            ProjectLibraryItems
-        );
-        projectLibraryView.GroupDescriptions.Add(
-            new PropertyGroupDescription(nameof(MacroProjectSummary.DateGroup))
-        );
-        ProjectLibraryFolderText.Text = MacroProjectStore.ProjectLibraryPath;
 
         countdownTimer = new DispatcherTimer
         {
@@ -167,379 +160,20 @@ public partial class MainWindow : Window
         Closing += MainWindow_Closing;
     }
 
-    private async void MainWindow_Loaded(object sender, RoutedEventArgs e)
+    private void MainWindow_Loaded(object sender, RoutedEventArgs e)
     {
         Loaded -= MainWindow_Loaded;
-        isStartupLoading = true;
-        StartRecordingButton.IsEnabled = false;
-        StartDelayComboBox.IsEnabled = false;
+        isStartupLoading = false;
+        StartRecordingButton.IsEnabled = true;
+        StartDelayComboBox.IsEnabled = true;
+        RecordingStatusText.Text =
+            "기록 → 업무 시연 → 종료 → 실행. 네 단계면 됩니다.";
         UpdateEventLogUi();
-        try
-        {
-            var project = await MacroProjectStore.LoadLastProjectAsync();
-            if (project is null)
-            {
-                return;
-            }
-
-            LoadProject(project);
-            await SaveCurrentProjectAsync();
-            RecordingStatusText.Text = project.Status == MacroProjectStatus.Completed
-                ? $"최근 매크로를 복원했습니다. {RecordedEvents.Count}개 로그를 불러왔습니다."
-                : $"정상 완료되지 않은 녹화를 복원했습니다. {RecordedEvents.Count}개 로그를 경고와 함께 불러왔으며 실행할 수 있습니다.";
-        }
-        catch (FileNotFoundException)
-        {
-            RecordingStatusText.Text =
-                "최근 매크로 파일을 찾지 못했습니다. 새 녹화를 시작할 수 있습니다.";
-        }
-        catch (Exception exception)
-        {
-            RecordingStatusText.Text =
-                $"최근 매크로를 복원하지 못했습니다: {exception.Message}";
-        }
-        finally
-        {
-            isStartupLoading = false;
-            StartRecordingButton.IsEnabled = true;
-            StartDelayComboBox.IsEnabled = true;
-            UpdateEventLogUi();
-            await RefreshProjectLibraryAsync();
-        }
-    }
-
-    private void LoadProject(LoadedMacroProject project)
-    {
-        isLoadingProject = true;
-        try
-        {
-            ResetVideoPlayerForProjectSwitch();
-            currentProjectPath = project.ProjectPath;
-            currentVideoPath = project.CurrentVideoPath;
-            currentProjectStatus = project.Status;
-            projectRevision = 0;
-            lastCommittedProjectRevision = -1;
-            RecordedEvents.Clear();
-            nextEventSequence = 0;
-            foreach (
-                var recordedEvent in project.RecordedEvents
-                    .OrderBy(item => item.Offset)
-                    .ThenBy(item => item.Sequence)
-            )
-            {
-                MigrateLegacyReviewOnlyQuarantine(recordedEvent);
-                if (recordedEvent.Sequence <= 0)
-                {
-                    recordedEvent.Sequence = ++nextEventSequence;
-                }
-                else
-                {
-                    nextEventSequence = Math.Max(
-                        nextEventSequence,
-                        recordedEvent.Sequence
-                    );
-                }
-                RecordedEvents.Add(recordedEvent);
-            }
-
-            ApplyEventPolicies();
-            UpdateEventLogUi();
-            ResetManualEditor();
-            if (File.Exists(currentVideoPath))
-            {
-                LoadRecordedVideo(currentVideoPath);
-            }
-            else
-            {
-                VideoStatusText.Text = "연결된 영상을 찾지 못했습니다.";
-                OutputPathText.Text = $"저장 위치: {currentVideoPath}";
-            }
-        }
-        finally
-        {
-            isLoadingProject = false;
-        }
-    }
-
-    private void ResetVideoPlayerForProjectSwitch()
-    {
-        videoTimer.Stop();
-        try
-        {
-            RecordedVideo.Stop();
-        }
-        catch
-        {
-            // A media source can already be unavailable while switching records.
-        }
-
-        RecordedVideo.Source = null;
-        RecordedVideo.Position = TimeSpan.Zero;
-        isPlaying = false;
-        isVideoReady = false;
-        isSeekingVideo = false;
-        PlayPauseButton.Content = "▶ 재생";
-        PlayPauseButton.IsEnabled = false;
-        VideoPositionSlider.Value = 0;
-        VideoPositionSlider.Maximum = 0;
-        VideoPositionSlider.IsEnabled = false;
-        PlaybackSpeedComboBox.IsEnabled = false;
-        VideoTimeText.Text = "00:00 / 00:00";
-        VideoPlaceholder.Visibility = Visibility.Visible;
-        EventOverlayCanvas.Children.Clear();
-    }
-
-    private async Task RefreshProjectLibraryAsync()
-    {
-        var cancellationSource = new CancellationTokenSource();
-        var previousSource = projectLibraryRefreshCancellation;
-        projectLibraryRefreshCancellation = cancellationSource;
-        previousSource?.Cancel();
-        previousSource?.Dispose();
-        isProjectLibraryLoading = true;
-        UpdateProjectLibraryUi();
-        try
-        {
-            var projects = await MacroProjectStore.ListProjectsAsync(
-                cancellationSource.Token
-            );
-            if (
-                cancellationSource.IsCancellationRequested
-                || !ReferenceEquals(
-                    projectLibraryRefreshCancellation,
-                    cancellationSource
-                )
-            )
-            {
-                return;
-            }
-
-            var selectedPath = (
-                ProjectLibraryList.SelectedItem as MacroProjectSummary
-            )?.ProjectPath;
-            ProjectLibraryItems.Clear();
-            foreach (var project in projects)
-            {
-                ProjectLibraryItems.Add(project);
-            }
-
-            if (!string.IsNullOrWhiteSpace(selectedPath))
-            {
-                ProjectLibraryList.SelectedItem = ProjectLibraryItems.FirstOrDefault(
-                    item =>
-                        string.Equals(
-                            item.ProjectPath,
-                            selectedPath,
-                            StringComparison.OrdinalIgnoreCase
-                        )
-                );
-            }
-
-            ProjectLibraryStatusText.Text =
-                $"{ProjectLibraryItems.Count:N0}개 기록 · {DateTime.Now:HH:mm:ss} 새로고침";
-        }
-        catch (OperationCanceledException)
-        {
-            // A newer refresh or window shutdown replaced this request.
-        }
-        catch (Exception exception)
-        {
-            ProjectLibraryStatusText.Text =
-                $"기록 저장소를 읽지 못했습니다: {exception.Message}";
-        }
-        finally
-        {
-            if (
-                ReferenceEquals(
-                    projectLibraryRefreshCancellation,
-                    cancellationSource
-                )
-            )
-            {
-                projectLibraryRefreshCancellation = null;
-                cancellationSource.Dispose();
-                isProjectLibraryLoading = false;
-                UpdateProjectLibraryUi();
-            }
-        }
-    }
-
-    private async void RightPanelTabs_SelectionChanged(
-        object sender,
-        SelectionChangedEventArgs e
-    )
-    {
-        if (
-            !ReferenceEquals(e.OriginalSource, RightPanelTabs)
-            || RightPanelTabs.SelectedIndex != 1
-        )
-        {
-            return;
-        }
-
-        await RefreshProjectLibraryAsync();
-    }
-
-    private async void RefreshProjectLibraryButton_Click(
-        object sender,
-        RoutedEventArgs e
-    )
-    {
-        await RefreshProjectLibraryAsync();
-    }
-
-    private void ProjectLibraryList_SelectionChanged(
-        object sender,
-        SelectionChangedEventArgs e
-    )
-    {
-        UpdateProjectLibraryUi();
-    }
-
-    private void OpenProjectLibraryFolderButton_Click(
-        object sender,
-        RoutedEventArgs e
-    )
-    {
-        try
-        {
-            Directory.CreateDirectory(MacroProjectStore.ProjectLibraryPath);
-            Process.Start(
-                new ProcessStartInfo
-                {
-                    FileName = MacroProjectStore.ProjectLibraryPath,
-                    UseShellExecute = true,
-                }
-            );
-        }
-        catch (Exception exception)
-        {
-            ProjectLibraryStatusText.Text =
-                $"저장소 폴더를 열지 못했습니다: {exception.Message}";
-        }
-    }
-
-    private async void LoadSelectedProjectButton_Click(
-        object sender,
-        RoutedEventArgs e
-    )
-    {
-        if (
-            ProjectLibraryList.SelectedItem is not MacroProjectSummary project
-            || !project.IsLoadable
-            || IsProjectSwitchBlocked()
-        )
-        {
-            return;
-        }
-
-        isSwitchingProject = true;
-        projectSaveTimer.Stop();
-        UpdateEventLogUi();
-        UpdateProjectLibraryUi();
-        try
-        {
-            await SaveCurrentProjectAsync(propagateFailure: true);
-            if (
-                string.Equals(
-                    currentProjectPath,
-                    project.ProjectPath,
-                    StringComparison.OrdinalIgnoreCase
-                )
-            )
-            {
-                RightPanelTabs.SelectedIndex = 0;
-                RecordingStatusText.Text =
-                    "이미 열려 있는 기록입니다.";
-                return;
-            }
-
-            var loadedProject = await MacroProjectStore.ReadAsync(
-                project.ProjectPath
-            );
-            await MacroProjectStore.RememberLastProjectPathAsync(
-                loadedProject.ProjectPath
-            );
-            LoadProject(loadedProject);
-            RightPanelTabs.SelectedIndex = 0;
-            RecordingStatusText.Text =
-                loadedProject.Status == MacroProjectStatus.Completed
-                    ? $"{project.DateGroup} {project.RecordedAtText} 기록을 불러왔습니다."
-                    : $"{project.DateGroup} {project.RecordedAtText} 기록을 검토용으로 불러왔습니다.";
-        }
-        catch (Exception exception)
-        {
-            RecordingStatusText.Text =
-                $"선택한 기록을 불러오지 못했습니다: {exception.Message}";
-            ProjectLibraryStatusText.Text =
-                $"불러오기 실패: {exception.Message}";
-        }
-        finally
-        {
-            isSwitchingProject = false;
-            UpdateEventLogUi();
-            UpdateProjectLibraryUi();
-        }
-    }
-
-    private bool IsProjectSwitchBlocked()
-    {
-        return isStartupLoading
-            || closeRequested
-            || isRecording
-            || isPreparingRecording
-            || isFinalizing
-            || isCountingDown
-            || isMacroCountingDown
-            || isMacroRunning
-            || isProjectLibraryLoading
-            || isSwitchingProject;
-    }
-
-    private void UpdateProjectLibraryUi()
-    {
-        var selected = ProjectLibraryList.SelectedItem as MacroProjectSummary;
-        ProjectLibraryCountText.Text =
-            ProjectLibraryItems.Count.ToString("N0");
-        ProjectLibraryEmptyText.Visibility =
-            ProjectLibraryItems.Count == 0 && !isProjectLibraryLoading
-                ? Visibility.Visible
-                : Visibility.Collapsed;
-
-        if (selected is null)
-        {
-            SelectedProjectDetailText.Text =
-                "목록에서 기록을 선택하세요.";
-            ProjectLibraryFolderText.Text =
-                MacroProjectStore.ProjectLibraryPath;
-        }
-        else
-        {
-            SelectedProjectDetailText.Text = selected.IsReadable
-                ? $"{selected.StatusText} · {selected.EventCountText} · {selected.VideoStatusText}"
-                : $"읽기 실패 · {selected.ErrorMessage}";
-            ProjectLibraryFolderText.Text = selected.ProjectPath;
-        }
-
-        var blocked = IsProjectSwitchBlocked();
-        ProjectLibraryList.IsEnabled =
-            !isSwitchingProject && !isProjectLibraryLoading;
-        RefreshProjectLibraryButton.IsEnabled =
-            !isSwitchingProject && !isProjectLibraryLoading;
-        OpenProjectLibraryFolderButton.IsEnabled =
-            !isSwitchingProject;
-        LoadSelectedProjectButton.IsEnabled =
-            selected?.IsLoadable == true
-            && !blocked
-            && !isProjectLibraryLoading;
     }
 
     private void ScheduleProjectSave()
     {
-        if (
-            isLoadingProject
-            || string.IsNullOrWhiteSpace(currentVideoPath)
-        )
+        if (string.IsNullOrWhiteSpace(currentVideoPath))
         {
             return;
         }
@@ -562,13 +196,7 @@ public partial class MainWindow : Window
         await projectSaveGate.WaitAsync();
         try
         {
-            if (
-                string.IsNullOrWhiteSpace(currentVideoPath)
-                || (
-                    !propagateFailure
-                    && (isSwitchingProject || isPreparingRecording)
-                )
-            )
+            if (string.IsNullOrWhiteSpace(currentVideoPath))
             {
                 return true;
             }
@@ -647,8 +275,6 @@ public partial class MainWindow : Window
             || isFinalizing
             || isMacroCountingDown
             || isMacroRunning
-            || isProjectLibraryLoading
-            || isSwitchingProject
         )
         {
             return;
@@ -694,7 +320,7 @@ public partial class MainWindow : Window
         try
         {
             projectSaveTimer.Stop();
-            await SaveCurrentProjectAsync(propagateFailure: true);
+            await SaveCurrentProjectAsync();
             RecordedVideo.Pause();
             isPlaying = false;
             PlayPauseButton.Content = "▶ 재생";
@@ -721,6 +347,7 @@ public partial class MainWindow : Window
         catch (Exception exception)
         {
             StopGlobalHook();
+            CompleteHookEventQueue();
             DisposeRecorder();
             isRecording = false;
             isPreparingRecording = false;
@@ -830,8 +457,14 @@ public partial class MainWindow : Window
 
     private void BeginEventCapture()
     {
+        _ = BeginEventCaptureAsync();
+    }
+
+    private async Task BeginEventCaptureAsync()
+    {
         if (
             eventCaptureStarted
+            || isStartingEventCapture
             || !isPreparingRecording
             || isFinalizing
             || recorder is null
@@ -840,6 +473,10 @@ public partial class MainWindow : Window
             return;
         }
 
+        isStartingEventCapture = true;
+        var sessionId = recordingSessionId;
+        var preparationToken =
+            recordingPreparationCancellation?.Token ?? CancellationToken.None;
         try
         {
             if (string.IsNullOrWhiteSpace(pendingVideoPath))
@@ -866,7 +503,36 @@ public partial class MainWindow : Window
             recordingSessionCommitted = true;
             UpdateEventLogUi();
 
-            var hook = new TaskPoolGlobalHook();
+            hookEventQueue = new OrderedAsyncDrainQueue<HookEventSnapshot>(
+                DispatchHookEventAsync
+            );
+            var readySource = new TaskCompletionSource<bool>(
+                TaskCreationOptions.RunContinuationsAsynchronously
+            );
+            globalHookReadySource = readySource;
+
+            var hook = new SimpleGlobalHook(runAsyncOnBackgroundThread: true);
+            var stopRequest = new CancellationTokenSource();
+            globalHookStopRequest = stopRequest;
+            EventHandler<HookEventArgs> hookEnabledHandler = (_, _) =>
+            {
+                readySource.TrySetResult(true);
+                if (!stopRequest.IsCancellationRequested)
+                {
+                    return;
+                }
+
+                try
+                {
+                    hook.Stop();
+                }
+                catch
+                {
+                    // StopGlobalHookAsync retries Stop and reports any failure.
+                }
+            };
+            globalHookEnabledHandler = hookEnabledHandler;
+            hook.HookEnabled += hookEnabledHandler;
             hook.MousePressed += GlobalHook_MousePressed;
             hook.MouseReleased += GlobalHook_MouseReleased;
             hook.MouseDragged += GlobalHook_MouseDragged;
@@ -874,28 +540,26 @@ public partial class MainWindow : Window
             hook.KeyPressed += GlobalHook_KeyPressed;
             hook.KeyReleased += GlobalHook_KeyReleased;
             globalHook = hook;
-            _ = hook.RunAsync().ContinueWith(
-                task =>
-                {
-                    if (
-                        task.IsFaulted
-                        && ReferenceEquals(globalHook, hook)
-                    )
-                    {
-                        Dispatcher.BeginInvoke(
-                            () =>
-                                StopRecordingAfterFailure(
-                                    $"입력 이벤트 감지를 시작하지 못했습니다: "
-                                    + $"{task.Exception?.GetBaseException().Message}"
-                                )
-                        );
-                    }
-                },
-                TaskScheduler.Default
+            var hookRunTask = hook.RunAsync();
+            globalHookRunTask = hookRunTask;
+
+            await HookStartupReadiness.WaitAsync(
+                readySource.Task,
+                hookRunTask,
+                TimeSpan.FromSeconds(5),
+                preparationToken
             );
+            preparationToken.ThrowIfCancellationRequested();
+            if (
+                isFinalizing
+                || sessionId != recordingSessionId
+                || !ReferenceEquals(globalHook, hook)
+            )
+            {
+                return;
+            }
 
             recordingClock.Restart();
-            recordingPreparationCancellation?.Cancel();
             isPreparingRecording = false;
             isRecording = true;
             eventCaptureStarted = true;
@@ -906,6 +570,14 @@ public partial class MainWindow : Window
                 "화면 녹화와 이벤트 기록을 시작했습니다.",
                 TimeSpan.Zero
             );
+            recordingPreparationCancellation?.Cancel();
+            _ = MonitorGlobalHookAsync(hook, hookRunTask, sessionId);
+        }
+        catch (OperationCanceledException) when (
+            isFinalizing || sessionId != recordingSessionId
+        )
+        {
+            // StopRecordingAsync owns hook shutdown and queue draining.
         }
         catch (Exception exception)
         {
@@ -913,6 +585,46 @@ public partial class MainWindow : Window
                 $"입력 이벤트 감지를 시작하지 못했습니다: {exception.Message}"
             );
         }
+        finally
+        {
+            isStartingEventCapture = false;
+        }
+    }
+
+    private async Task MonitorGlobalHookAsync(
+        SimpleGlobalHook hook,
+        Task runTask,
+        long sessionId
+    )
+    {
+        Exception? failure = null;
+        try
+        {
+            await runTask;
+        }
+        catch (Exception exception)
+        {
+            failure = exception.GetBaseException();
+        }
+
+        await Dispatcher.InvokeAsync(() =>
+        {
+            if (
+                sessionId != recordingSessionId
+                || !ReferenceEquals(globalHook, hook)
+                || isFinalizing
+                || !isRecording
+            )
+            {
+                return;
+            }
+
+            StopRecordingAfterFailure(
+                failure is null
+                    ? "입력 이벤트 감지가 예기치 않게 종료되었습니다."
+                    : $"입력 이벤트 감지가 중단되었습니다: {failure.Message}"
+            );
+        });
     }
 
     private void CancelRecordingCountdown()
@@ -930,24 +642,58 @@ public partial class MainWindow : Window
 
     private void StopRecording()
     {
+        _ = StopRecordingAsync();
+    }
+
+    private async Task StopRecordingAsync()
+    {
         if ((!isRecording && !isPreparingRecording) || isFinalizing)
         {
             return;
         }
 
-        isRecording = false;
-        isPreparingRecording = false;
-        eventCaptureStarted = false;
         isFinalizing = true;
-        recordingClock.Stop();
-        recordingTimer.Stop();
         recordingPreparationCancellation?.Cancel();
-        StopGlobalHook();
 
         StartRecordingButton.IsEnabled = false;
         StopRecordingButton.IsEnabled = false;
-        RecordingStatusText.Text = "영상을 마무리하고 있습니다…";
+        RecordingStatusText.Text = "마지막 입력을 반영하고 영상을 마무리하고 있습니다…";
         RecordingTimerText.Text = "저장 중";
+
+        var shutdownErrors = new List<Exception>();
+        try
+        {
+            await StopGlobalHookAsync();
+        }
+        catch (Exception exception)
+        {
+            shutdownErrors.Add(exception);
+        }
+
+        try
+        {
+            await CompleteAndDrainHookEventQueueAsync();
+        }
+        catch (Exception exception)
+        {
+            shutdownErrors.Add(exception);
+        }
+
+        if (shutdownErrors.Count > 0)
+        {
+            recordingFailureMessage =
+                "마지막 입력 감지를 정리하지 못했습니다: "
+                + string.Join(
+                    " · ",
+                    shutdownErrors.Select(error => error.GetBaseException().Message)
+                );
+        }
+
+        isRecording = false;
+        isPreparingRecording = false;
+        eventCaptureStarted = false;
+        recordingClock.Stop();
+        recordingTimer.Stop();
 
         try
         {
@@ -1072,13 +818,21 @@ public partial class MainWindow : Window
         {
             if (pendingMousePresses.TryGetValue(e.Data.Button, out var pending))
             {
-                pending.MarkDragged(e.Data.X, e.Data.Y);
+                pending.MarkDragged(
+                    e.Data.X,
+                    e.Data.Y,
+                    recordingClock.Elapsed
+                );
                 return;
             }
 
             foreach (var activePress in pendingMousePresses.Values)
             {
-                activePress.MarkDragged(e.Data.X, e.Data.Y);
+                activePress.MarkDragged(
+                    e.Data.X,
+                    e.Data.Y,
+                    recordingClock.Elapsed
+                );
             }
         }
     }
@@ -1109,13 +863,17 @@ public partial class MainWindow : Window
             MouseButton.Button3 => "가운데",
             _ => pending.Button.ToString(),
         };
+        var releaseOffset = recordingClock.Elapsed;
         var distance = Math.Sqrt(
             Math.Pow(e.Data.X - pending.StartX, 2)
             + Math.Pow(e.Data.Y - pending.StartY, 2)
         );
         var isDrag = pending.WasDragged || distance >= 4;
-        var returnedToRecorder = IsOwnProcessWindow(GetForegroundWindow());
-        var quarantine = isDrag || returnedToRecorder;
+        pending.Complete(e.Data.X, e.Data.Y, releaseOffset, isDrag);
+        var mousePath = isDrag ? pending.GetPath() : [];
+        var dragDuration = releaseOffset >= pending.Offset
+            ? releaseOffset - pending.Offset
+            : TimeSpan.Zero;
         AddEventFromHook(
             "마우스",
             isDrag
@@ -1123,16 +881,15 @@ public partial class MainWindow : Window
                 : $"{button} 클릭 · 화면 좌표 ({pending.StartX}, {pending.StartY})",
             pending.StartX,
             pending.StartY,
-            isDrag ? $"{button} 드래그 · 자동 실행 제외" : $"{button} 클릭",
-            pending.ActionKind,
+            isDrag ? $"{button} 드래그" : $"{button} 클릭",
+            isDrag ? MacroActionKind.MouseDrag : pending.ActionKind,
             modifierKeyCodes: pending.ModifierKeyCodes,
             explicitOffset: pending.Offset,
-            isQuarantined: quarantine,
-            quarantineReason: isDrag
-                ? "드래그 종료 좌표와 지속시간 데이터가 없어 현재 실행기가 재생할 수 없습니다."
-                : returnedToRecorder
-                    ? "매크로 앱 자체를 조작하는 동작이라 실행할 수 없습니다."
-                    : null
+            endScreenX: isDrag ? e.Data.X : null,
+            endScreenY: isDrag ? e.Data.Y : null,
+            dragButton: isDrag ? pending.Button : null,
+            dragDuration: isDrag ? dragDuration : null,
+            mousePath: mousePath
         );
     }
 
@@ -1363,49 +1120,96 @@ public partial class MainWindow : Window
         TimeSpan? explicitOffset = null,
         bool isQuarantined = false,
         string? quarantineReason = null,
-        string? reviewWarningText = null
+        string? reviewWarningText = null,
+        double? endScreenX = null,
+        double? endScreenY = null,
+        MouseButton? dragButton = null,
+        TimeSpan? dragDuration = null,
+        MousePathPoint[]? mousePath = null
     )
     {
-        var offset = explicitOffset ?? recordingClock.Elapsed;
-        var sessionId = recordingSessionId;
-        var eventCaptureLeft = captureLeft;
-        var eventCaptureTop = captureTop;
-        var eventCaptureWidth = captureWidth;
-        var eventCaptureHeight = captureHeight;
-        Dispatcher.BeginInvoke(
-            () =>
-            {
-                if (
-                    sessionId != recordingSessionId
-                    || !eventCaptureStarted
-                    || !isRecording
-                )
-                {
-                    return;
-                }
+        var queue = hookEventQueue;
+        if (queue is null)
+        {
+            return;
+        }
 
-                AddEvent(
-                    category,
-                    message,
-                    offset,
-                    screenX,
-                    screenY,
-                    overlayLabel,
-                    actionKind,
-                    actionText,
-                    keyCodes,
-                    wheelRotation,
-                    isHorizontalWheel,
-                    modifierKeyCodes,
-                    isQuarantined,
-                    quarantineReason,
-                    reviewWarningText,
-                    eventCaptureLeft,
-                    eventCaptureTop,
-                    eventCaptureWidth,
-                    eventCaptureHeight
-                );
-            }
+        _ = queue.TryEnqueue(
+            new HookEventSnapshot(
+                recordingSessionId,
+                explicitOffset ?? recordingClock.Elapsed,
+                category,
+                message,
+                screenX,
+                screenY,
+                overlayLabel,
+                actionKind,
+                actionText,
+                keyCodes?.ToArray() ?? [],
+                wheelRotation,
+                isHorizontalWheel,
+                modifierKeyCodes?.ToArray() ?? [],
+                isQuarantined,
+                quarantineReason,
+                reviewWarningText,
+                captureLeft,
+                captureTop,
+                captureWidth,
+                captureHeight,
+                endScreenX,
+                endScreenY,
+                dragButton,
+                dragDuration,
+                mousePath?.ToArray() ?? []
+            )
+        );
+    }
+
+    private ValueTask DispatchHookEventAsync(HookEventSnapshot snapshot)
+    {
+        var operation = Dispatcher.InvokeAsync(
+            () => CommitHookEvent(snapshot),
+            DispatcherPriority.Normal
+        );
+        return new ValueTask(operation.Task);
+    }
+
+    private void CommitHookEvent(HookEventSnapshot snapshot)
+    {
+        if (
+            snapshot.SessionId != recordingSessionId
+            || !eventCaptureStarted
+            || !isRecording
+        )
+        {
+            return;
+        }
+
+        AddEvent(
+            snapshot.Category,
+            snapshot.Message,
+            snapshot.Offset,
+            snapshot.ScreenX,
+            snapshot.ScreenY,
+            snapshot.OverlayLabel,
+            snapshot.ActionKind,
+            snapshot.ActionText,
+            snapshot.KeyCodes,
+            snapshot.WheelRotation,
+            snapshot.IsHorizontalWheel,
+            snapshot.ModifierKeyCodes,
+            snapshot.IsQuarantined,
+            snapshot.QuarantineReason,
+            snapshot.ReviewWarningText,
+            snapshot.CaptureLeft,
+            snapshot.CaptureTop,
+            snapshot.CaptureWidth,
+            snapshot.CaptureHeight,
+            snapshot.EndScreenX,
+            snapshot.EndScreenY,
+            snapshot.DragButton,
+            snapshot.DragDuration,
+            snapshot.MousePath
         );
     }
 
@@ -1428,7 +1232,12 @@ public partial class MainWindow : Window
         int? eventCaptureLeft = null,
         int? eventCaptureTop = null,
         int? eventCaptureWidth = null,
-        int? eventCaptureHeight = null
+        int? eventCaptureHeight = null,
+        double? endScreenX = null,
+        double? endScreenY = null,
+        MouseButton? dragButton = null,
+        TimeSpan? dragDuration = null,
+        MousePathPoint[]? mousePath = null
     )
     {
         var recordedEvent = new RecordedEvent
@@ -1449,6 +1258,11 @@ public partial class MainWindow : Window
             Sequence = ++nextEventSequence,
             ScreenX = screenX,
             ScreenY = screenY,
+            EndScreenX = endScreenX,
+            EndScreenY = endScreenY,
+            DragButton = dragButton,
+            DragDuration = dragDuration,
+            MousePath = mousePath?.ToArray() ?? [],
             CaptureLeft = eventCaptureLeft ?? captureLeft,
             CaptureTop = eventCaptureTop ?? captureTop,
             CaptureWidth = eventCaptureWidth ?? captureWidth,
@@ -1464,7 +1278,23 @@ public partial class MainWindow : Window
 
     private void InsertEventChronologically(RecordedEvent recordedEvent)
     {
-        ClearExecutionResults();
+        if (!isRecording)
+        {
+            ClearExecutionResults();
+        }
+        if (
+            RecordedEvents.Count == 0
+            || RecordedEvents[^1].Offset < recordedEvent.Offset
+            || (
+                RecordedEvents[^1].Offset == recordedEvent.Offset
+                && RecordedEvents[^1].Sequence <= recordedEvent.Sequence
+            )
+        )
+        {
+            RecordedEvents.Add(recordedEvent);
+            return;
+        }
+
         var insertionIndex = 0;
         while (
             insertionIndex < RecordedEvents.Count
@@ -1608,28 +1438,15 @@ public partial class MainWindow : Window
 
     private void UpdateEventLogUi()
     {
-        ApplyEventPolicies();
         EventCountText.Text = RecordedEvents.Count.ToString();
-        var warningCount = RecordedEvents.Count(
-            recordedEvent => recordedEvent.HasReviewWarning
-        );
         var blockedCount = RecordedEvents.Count(
             recordedEvent => recordedEvent.IsQuarantined
         );
-        var executableWarningCount = RecordedEvents.Count(
-            recordedEvent => recordedEvent.IsExecutable && recordedEvent.HasReviewWarning
-        );
-        WarningCountText.Text = $"확인 {warningCount}";
-        WarningCountBadge.Visibility = warningCount > 0
-            ? Visibility.Visible
-            : Visibility.Collapsed;
-        BlockedCountText.Text = $"실행 불가 {blockedCount}";
+        BlockedCountText.Text = $"실패 {blockedCount}";
         BlockedCountBadge.Visibility = blockedCount > 0
             ? Visibility.Visible
             : Visibility.Collapsed;
-        RunMacroButton.Content = executableWarningCount > 0
-            ? $"▶ 경고 {executableWarningCount}개 포함 실행"
-            : "▶ 매크로 실행";
+        RunMacroButton.Content = "▶ 실행";
         var editingLocked =
             isStartupLoading
             || closeRequested
@@ -1638,10 +1455,11 @@ public partial class MainWindow : Window
             || isFinalizing
             || isCountingDown
             || isMacroCountingDown
-            || isMacroRunning
-            || isProjectLibraryLoading
-            || isSwitchingProject;
+            || isMacroRunning;
         EventLogList.IsEnabled = !editingLocked;
+        EmptyEventHint.Visibility = RecordedEvents.Count == 0
+            ? Visibility.Visible
+            : Visibility.Collapsed;
         ManualEditorPanel.IsEnabled = !editingLocked;
         ClearEventsButton.IsEnabled =
             RecordedEvents.Count > 0 && !editingLocked;
@@ -1653,10 +1471,7 @@ public partial class MainWindow : Window
             && !isFinalizing
             && !isCountingDown
             && !isMacroCountingDown
-            && !isMacroRunning
-            && !isProjectLibraryLoading
-            && !isSwitchingProject;
-        UpdateProjectLibraryUi();
+            && !isMacroRunning;
     }
 
     private async void RunMacroButton_Click(object sender, RoutedEventArgs e)
@@ -1667,8 +1482,6 @@ public partial class MainWindow : Window
             || isCountingDown
             || isMacroCountingDown
             || isMacroRunning
-            || isProjectLibraryLoading
-            || isSwitchingProject
         )
         {
             return;
@@ -1789,14 +1602,8 @@ public partial class MainWindow : Window
         var executableCount = RecordedEvents.Count(
             recordedEvent => recordedEvent.IsExecutable
         );
-        var warningCount = RecordedEvents.Count(
-            recordedEvent => recordedEvent.IsExecutable && recordedEvent.HasReviewWarning
-        );
-        var warningSummary = warningCount > 0
-            ? $"추가 확인 {warningCount}개를 포함한 "
-            : string.Empty;
         RecordingStatusText.Text =
-            $"{warningSummary}{executableCount}개 이벤트를 {delaySeconds}초 후 실행합니다. 지금 대상 입력창이나 업무 화면을 선택하세요.";
+            $"{executableCount}개 이벤트를 {delaySeconds}초 후 실행합니다. 지금 대상 입력창이나 업무 화면을 선택하세요.";
     }
 
     private void CancelMacroCountdown()
@@ -1826,7 +1633,7 @@ public partial class MainWindow : Window
         foreach (var recordedEvent in RecordedEvents)
         {
             recordedEvent.LastExecutionResult = recordedEvent.IsQuarantined
-                ? $"실행 불가 · {recordedEvent.QuarantineReason ?? "기술적으로 실행할 수 없는 이벤트입니다."}"
+                ? $"건너뜀 · {recordedEvent.QuarantineReason ?? "기술적으로 실행할 수 없는 이벤트입니다."}"
                 : null;
             recordedEvent.LastExecutionFailed = recordedEvent.IsQuarantined;
         }
@@ -1855,12 +1662,7 @@ public partial class MainWindow : Window
         PlaybackSpeedComboBox.IsEnabled = false;
         RecordingDot.Fill = new SolidColorBrush(Color.FromRgb(18, 183, 106));
         RecordingTimerText.Text = $"0/{eventCount}";
-        var warningCount = RecordedEvents.Count(
-            recordedEvent => recordedEvent.IsExecutable && recordedEvent.HasReviewWarning
-        );
-        var runSummary = warningCount > 0
-            ? $"추가 확인 {warningCount}개를 포함해 매크로를 실행 중입니다."
-            : "매크로 실행 중입니다.";
+        const string runSummary = "매크로 실행 중입니다.";
         RecordingStatusText.Text = string.IsNullOrWhiteSpace(
             macroRunPreparationWarning
         )
@@ -1874,6 +1676,7 @@ public partial class MainWindow : Window
     )
     {
         var clock = Stopwatch.StartNew();
+        var baseOffset = executableEvents[0].Offset;
         var successCount = 0;
         var failedCount = 0;
         try
@@ -1882,7 +1685,7 @@ public partial class MainWindow : Window
             {
                 var recordedEvent = executableEvents[index];
                 await WaitUntilMacroOffsetAsync(
-                    recordedEvent.Offset,
+                    recordedEvent.Offset - baseOffset,
                     clock,
                     cancellationSource.Token
                 );
@@ -1925,11 +1728,8 @@ public partial class MainWindow : Window
                 }
             }
 
-            var blockedCount = RecordedEvents.Count(
-                recordedEvent => recordedEvent.IsQuarantined
-            );
             RestoreUiAfterMacro(
-                $"입력 전송을 마쳤습니다. 성공 {successCount} · 실패 {failedCount} · 실행 불가 {blockedCount}. 대상 업무 결과를 확인하세요.",
+                $"실행을 마쳤습니다. 성공 {successCount} · 실패 {failedCount}.",
                 "실행 완료"
             );
         }
@@ -2017,6 +1817,9 @@ public partial class MainWindow : Window
             case MacroActionKind.MouseMiddleClick:
                 ExecuteMouseClick(recordedEvent, MouseButton.Button3);
                 break;
+            case MacroActionKind.MouseDrag:
+                ExecuteMouseDrag(recordedEvent, cancellationToken);
+                break;
             case MacroActionKind.MouseWheel:
                 ExecuteMouseWheel(recordedEvent);
                 break;
@@ -2044,6 +1847,7 @@ public partial class MainWindow : Window
                     MacroActionKind.MouseLeftClick
                     or MacroActionKind.MouseRightClick
                     or MacroActionKind.MouseMiddleClick
+                    or MacroActionKind.MouseDrag
                     or MacroActionKind.MouseWheel
                 )
         )
@@ -2172,6 +1976,70 @@ public partial class MainWindow : Window
                 )
             );
         });
+    }
+
+    private void ExecuteMouseDrag(
+        RecordedEvent recordedEvent,
+        CancellationToken cancellationToken
+    )
+    {
+        if (recordedEvent.DragButton is not { } button)
+        {
+            throw new InvalidOperationException(
+                "드래그 버튼 정보가 없습니다."
+            );
+        }
+        if (recordedEvent.MousePath.Length < 2)
+        {
+            throw new InvalidOperationException(
+                "드래그 경로가 없습니다."
+            );
+        }
+
+        ExecuteWithRecordedModifiers(recordedEvent, () =>
+        {
+            try
+            {
+                MouseDragReplayEngine.Execute(
+                    recordedEvent.MousePath,
+                    button,
+                    MoveCursorTo,
+                    pressedButton =>
+                    {
+                        var (downFlag, _) = GetMouseButtonFlags(pressedButton);
+                        SendNativeMouseInputs(CreateNativeMouseInput(downFlag));
+                    },
+                    releasedButton =>
+                    {
+                        var (_, upFlag) = GetMouseButtonFlags(releasedButton);
+                        SendNativeMouseInputs(CreateNativeMouseInput(upFlag));
+                    },
+                    cancellationToken
+                );
+            }
+            catch (MouseButtonReleaseException exception)
+            {
+                throw new MacroInputCleanupException(
+                    "드래그 후 마우스 버튼을 해제하지 못했습니다.",
+                    exception
+                );
+            }
+        });
+    }
+
+    private static (uint Down, uint Up) GetMouseButtonFlags(
+        MouseButton button
+    )
+    {
+        return button switch
+        {
+            MouseButton.Button1 => (MouseEventLeftDown, MouseEventLeftUp),
+            MouseButton.Button2 => (MouseEventRightDown, MouseEventRightUp),
+            MouseButton.Button3 => (MouseEventMiddleDown, MouseEventMiddleUp),
+            _ => throw new InvalidOperationException(
+                $"지원하지 않는 마우스 버튼입니다: {button}"
+            ),
+        };
     }
 
     private void ExecuteWithRecordedModifiers(
@@ -2594,6 +2462,17 @@ public partial class MainWindow : Window
         if (actionPayloadChanged || repairsPolicyBlockedPointer)
         {
             if (
+                recordedEvent.ActionKind == MacroActionKind.MouseDrag
+                && actionTag == "MouseDrag"
+            )
+            {
+                if (!string.IsNullOrWhiteSpace(activity))
+                {
+                    recordedEvent.Message = activity;
+                    recordedEvent.OverlayLabel = activity;
+                }
+            }
+            else if (
                 IsPointerActionTag(actionTag)
                 && recordedEvent.ActionKind
                     is MacroActionKind.MouseLeftClick
@@ -2728,7 +2607,7 @@ public partial class MainWindow : Window
         )
         {
             SetManualEditorMessage(
-                $"영상 종료 후 {offset.TotalSeconds:0.000}초에 실행됩니다. 경고로 표시하지만 추가를 막지 않습니다."
+                $"영상 종료 후 {offset.TotalSeconds:0.000}초에 실행됩니다."
             );
         }
 
@@ -2859,6 +2738,7 @@ public partial class MainWindow : Window
             MacroActionKind.MouseLeftClick => "MouseLeftClick",
             MacroActionKind.MouseRightClick => "MouseRightClick",
             MacroActionKind.MouseMiddleClick => "MouseMiddleClick",
+            MacroActionKind.MouseDrag => "MouseDrag",
             MacroActionKind.MouseWheel
                 when recordedEvent.IsHorizontalWheel
                     && recordedEvent.WheelRotation >= 0 =>
@@ -2887,6 +2767,11 @@ public partial class MainWindow : Window
         recordedEvent.IsHorizontalWheel = false;
         recordedEvent.ScreenX = null;
         recordedEvent.ScreenY = null;
+        recordedEvent.EndScreenX = null;
+        recordedEvent.EndScreenY = null;
+        recordedEvent.DragButton = null;
+        recordedEvent.DragDuration = null;
+        recordedEvent.MousePath = [];
         recordedEvent.IsQuarantined = false;
         recordedEvent.QuarantineReason = null;
         recordedEvent.ReviewWarningText = null;
@@ -3211,7 +3096,6 @@ public partial class MainWindow : Window
                             ? $"영상과 {RecordedEvents.Count}개 이벤트를 저장했습니다."
                             : $"{recordingFailureMessage} 영상과 현재 이벤트는 저장했습니다."
                         : "영상은 저장했지만 매크로 프로젝트 저장에 실패했습니다.";
-                    await RefreshProjectLibraryAsync();
                 }
                 else
                 {
@@ -3252,7 +3136,6 @@ public partial class MainWindow : Window
                 if (recordingSessionCommitted)
                 {
                     await SaveCurrentProjectAsync();
-                    await RefreshProjectLibraryAsync();
                 }
                 recordingSessionCommitted = false;
                 await FinishCloseRequestAsync();
@@ -3320,7 +3203,7 @@ public partial class MainWindow : Window
         SetRecordingUi(false);
         DisposeRecorder();
         RecordingStatusText.Text = recordingSessionCommitted
-            ? $"{message} 현재 이벤트는 보존했습니다. 경고를 표시하며 실행은 사용자가 결정합니다."
+            ? $"{message} 현재 이벤트는 보존했습니다."
             : $"{message} 기존 로그는 그대로 보존했습니다.";
         isVideoReady = recordingSessionCommitted
             ? false
@@ -3331,10 +3214,12 @@ public partial class MainWindow : Window
     {
         isRecording = false;
         isPreparingRecording = false;
+        isStartingEventCapture = false;
         eventCaptureStarted = false;
         recordingClock.Stop();
         recordingTimer.Stop();
         StopGlobalHook();
+        CompleteHookEventQueue();
         lock (pendingMouseGate)
         {
             pendingMousePresses.Clear();
@@ -3349,10 +3234,8 @@ public partial class MainWindow : Window
             && !isFinalizing
             && !macroLocked
             && !isStartupLoading
-            && !isProjectLibraryLoading
-            && !isSwitchingProject
             && !closeRequested;
-        StartRecordingButton.Content = "● 녹화 시작";
+        StartRecordingButton.Content = "● 기록";
         StartRecordingButton.Background = new SolidColorBrush(
             Color.FromRgb(23, 105, 224)
         );
@@ -3362,8 +3245,6 @@ public partial class MainWindow : Window
             && !isFinalizing
             && !macroLocked
             && !isStartupLoading
-            && !isProjectLibraryLoading
-            && !isSwitchingProject
             && !closeRequested;
         StopRecordingButton.IsEnabled = recording;
         RecordingDot.Fill = recording
@@ -3597,9 +3478,6 @@ public partial class MainWindow : Window
     )
     {
         MigrateLegacyReviewOnlyQuarantine(recordedEvent);
-        videoDuration ??= RecordedVideo.NaturalDuration.HasTimeSpan
-            ? RecordedVideo.NaturalDuration.TimeSpan
-            : null;
 
         var technicalBlockReason = MacroEventPolicy.GetTechnicalBlockReason(
             recordedEvent
@@ -3618,42 +3496,7 @@ public partial class MainWindow : Window
                 "현재 엔진이 기술적으로 실행할 수 없는 이벤트입니다.";
         }
 
-        var warnings = new List<string>();
-        var policyWarning = MacroEventPolicy.GetReviewWarningText(
-            recordedEvent,
-            currentProjectStatus,
-            videoDuration,
-            captureLeft,
-            captureTop,
-            captureWidth,
-            captureHeight
-        );
-        if (!string.IsNullOrWhiteSpace(policyWarning))
-        {
-            warnings.Add(policyWarning);
-        }
-        if (
-            recordedEvent.ActionKind != MacroActionKind.None
-            && string.IsNullOrWhiteSpace(currentVideoPath)
-        )
-        {
-            warnings.Add(
-                "연결된 영상이 없어 현재 세션 이벤트는 저장되지 않습니다."
-            );
-        }
-        else if (
-            recordedEvent.ActionKind != MacroActionKind.None
-            && !isVideoReady
-            && !isRecording
-            && !isPreparingRecording
-            && !isFinalizing
-        )
-        {
-            warnings.Add("영상을 확인할 수 없지만 이벤트 로그는 실행할 수 있습니다.");
-        }
-        recordedEvent.ReviewWarningText = warnings.Count == 0
-            ? null
-            : string.Join(" · ", warnings);
+        recordedEvent.ReviewWarningText = null;
     }
 
     private static void MigrateLegacyReviewOnlyQuarantine(
@@ -3733,7 +3576,7 @@ public partial class MainWindow : Window
 
         var baseLabel = recordedEvent.OverlayLabel ?? recordedEvent.Message;
         var label = recordedEvent.IsQuarantined
-            ? $"실행 불가 · {baseLabel}"
+            ? $"실패 · {baseLabel}"
             : recordedEvent.HasReviewWarning
                 ? $"확인 · {baseLabel}"
                 : baseLabel;
@@ -3779,6 +3622,39 @@ public partial class MainWindow : Window
         var x = videoLeft + relativeX * displayedWidth;
         var y = videoTop + relativeY * displayedHeight;
         var opacity = Math.Max(0.38, 1 - progress * 0.62);
+
+        if (
+            recordedEvent.ActionKind == MacroActionKind.MouseDrag
+            && recordedEvent.MousePath.Length > 1
+        )
+        {
+            var pathPoints = new PointCollection(
+                recordedEvent.MousePath.Select(point =>
+                    new Point(
+                        videoLeft
+                            + (double)(point.X - recordedEvent.CaptureLeft)
+                                / recordedEvent.CaptureWidth
+                                * displayedWidth,
+                        videoTop
+                            + (double)(point.Y - recordedEvent.CaptureTop)
+                                / recordedEvent.CaptureHeight
+                                * displayedHeight
+                    )
+                )
+            );
+            EventOverlayCanvas.Children.Add(
+                new System.Windows.Shapes.Polyline
+                {
+                    Points = pathPoints,
+                    Stroke = eventBrush,
+                    StrokeThickness = 5,
+                    StrokeLineJoin = PenLineJoin.Round,
+                    StrokeStartLineCap = PenLineCap.Round,
+                    StrokeEndLineCap = PenLineCap.Round,
+                    Opacity = opacity,
+                }
+            );
+        }
 
         var ringSize = 54 + progress * 34;
         var ring = new Ellipse
@@ -4077,12 +3953,146 @@ public partial class MainWindow : Window
             + $"{(int)total.TotalMinutes:00}:{total.Seconds:00}";
     }
 
+    private async Task CompleteAndDrainHookEventQueueAsync()
+    {
+        var queue = hookEventQueue;
+        hookEventQueue = null;
+        if (queue is not null)
+        {
+            await queue.CompleteAndDrainAsync();
+        }
+    }
+
+    private void CompleteHookEventQueue()
+    {
+        var queue = hookEventQueue;
+        hookEventQueue = null;
+        queue?.Complete();
+    }
+
+    private async Task StopGlobalHookAsync()
+    {
+        var hook = globalHook;
+        var runTask = globalHookRunTask;
+        var readySource = globalHookReadySource;
+        var hookEnabledHandler = globalHookEnabledHandler;
+        var stopRequest = globalHookStopRequest;
+        stopRequest?.Cancel();
+        globalHook = null;
+        globalHookRunTask = null;
+        if (hook is null)
+        {
+            ClearGlobalHookStartupState(
+                readySource,
+                hookEnabledHandler,
+                stopRequest
+            );
+            return;
+        }
+
+        var errors = new List<Exception>();
+        if (
+            runTask is not null
+            && readySource is not null
+            && !readySource.Task.IsCompleted
+            && !runTask.IsCompleted
+        )
+        {
+            try
+            {
+                await Task.WhenAny(readySource.Task, runTask)
+                    .WaitAsync(TimeSpan.FromSeconds(5));
+            }
+            catch (Exception exception)
+            {
+                errors.Add(exception);
+            }
+        }
+
+        try
+        {
+            hook.Stop();
+        }
+        catch (Exception exception)
+        {
+            errors.Add(exception);
+        }
+
+        if (runTask is not null)
+        {
+            try
+            {
+                await runTask.WaitAsync(TimeSpan.FromSeconds(5));
+            }
+            catch (Exception exception)
+            {
+                errors.Add(exception);
+            }
+        }
+
+        try
+        {
+            hook.Dispose();
+        }
+        catch (Exception exception)
+        {
+            errors.Add(exception);
+        }
+
+        if (runTask is not null && !runTask.IsCompleted)
+        {
+            try
+            {
+                await runTask.WaitAsync(TimeSpan.FromSeconds(5));
+            }
+            catch (Exception exception)
+            {
+                errors.Add(exception);
+            }
+        }
+
+        try
+        {
+            DetachGlobalHookHandlers(hook, hookEnabledHandler);
+        }
+        catch (Exception exception)
+        {
+            errors.Add(exception);
+        }
+        finally
+        {
+            ClearGlobalHookStartupState(
+                readySource,
+                hookEnabledHandler,
+                stopRequest
+            );
+        }
+
+        if (errors.Count > 0)
+        {
+            throw new AggregateException(
+                "입력 이벤트 감지를 완전히 종료하지 못했습니다.",
+                errors
+            );
+        }
+    }
+
     private void StopGlobalHook()
     {
         var hook = globalHook;
+        var readySource = globalHookReadySource;
+        var hookEnabledHandler = globalHookEnabledHandler;
+        var stopRequest = globalHookStopRequest;
+        stopRequest?.Cancel();
         globalHook = null;
+        globalHookRunTask = null;
         if (hook is null)
         {
+            ClearGlobalHookStartupState(
+                readySource,
+                hookEnabledHandler,
+                stopRequest
+            );
             return;
         }
 
@@ -4092,12 +4102,68 @@ public partial class MainWindow : Window
         }
         catch
         {
-            // The hook may already have stopped during shutdown.
+            // Failure cleanup continues even if the native hook already stopped.
         }
         finally
         {
-            hook.Dispose();
+            try
+            {
+                hook.Dispose();
+            }
+            finally
+            {
+                try
+                {
+                    DetachGlobalHookHandlers(hook, hookEnabledHandler);
+                }
+                finally
+                {
+                    ClearGlobalHookStartupState(
+                        readySource,
+                        hookEnabledHandler,
+                        stopRequest
+                    );
+                }
+            }
         }
+    }
+
+    private void DetachGlobalHookHandlers(
+        SimpleGlobalHook hook,
+        EventHandler<HookEventArgs>? hookEnabledHandler
+    )
+    {
+        if (hookEnabledHandler is not null)
+        {
+            hook.HookEnabled -= hookEnabledHandler;
+        }
+        hook.MousePressed -= GlobalHook_MousePressed;
+        hook.MouseReleased -= GlobalHook_MouseReleased;
+        hook.MouseDragged -= GlobalHook_MouseDragged;
+        hook.MouseWheel -= GlobalHook_MouseWheel;
+        hook.KeyPressed -= GlobalHook_KeyPressed;
+        hook.KeyReleased -= GlobalHook_KeyReleased;
+    }
+
+    private void ClearGlobalHookStartupState(
+        TaskCompletionSource<bool>? readySource,
+        EventHandler<HookEventArgs>? hookEnabledHandler,
+        CancellationTokenSource? stopRequest
+    )
+    {
+        if (ReferenceEquals(globalHookReadySource, readySource))
+        {
+            globalHookReadySource = null;
+        }
+        if (ReferenceEquals(globalHookEnabledHandler, hookEnabledHandler))
+        {
+            globalHookEnabledHandler = null;
+        }
+        if (ReferenceEquals(globalHookStopRequest, stopRequest))
+        {
+            globalHookStopRequest = null;
+        }
+        stopRequest?.Dispose();
     }
 
     private void DisposeRecorder()
@@ -4241,15 +4307,7 @@ public partial class MainWindow : Window
             }
 
             projectSaveTimer.Stop();
-            var saved = await SaveCurrentProjectAsync();
-            if (!saved)
-            {
-                closeRequested = false;
-                SetRecordingUi(false);
-                RecordingStatusText.Text =
-                    "마지막 편집 내용을 저장하지 못해 종료를 취소했습니다.";
-                return;
-            }
+            await SaveCurrentProjectAsync();
 
             closeAfterSave = true;
             _ = Dispatcher.BeginInvoke(
@@ -4274,10 +4332,8 @@ public partial class MainWindow : Window
         videoTimer.Stop();
         projectSaveTimer.Stop();
         macroCancellation?.Cancel();
-        projectLibraryRefreshCancellation?.Cancel();
-        projectLibraryRefreshCancellation?.Dispose();
-        projectLibraryRefreshCancellation = null;
         StopGlobalHook();
+        CompleteHookEventQueue();
         DisposeRecorder();
         if (windowSource is not null)
         {
@@ -4295,6 +4351,34 @@ public partial class MainWindow : Window
         string message,
         Exception innerException
     ) : Exception(message, innerException);
+
+    private sealed record HookEventSnapshot(
+        long SessionId,
+        TimeSpan Offset,
+        string Category,
+        string Message,
+        double? ScreenX,
+        double? ScreenY,
+        string? OverlayLabel,
+        MacroActionKind ActionKind,
+        string? ActionText,
+        KeyCode[] KeyCodes,
+        int WheelRotation,
+        bool IsHorizontalWheel,
+        KeyCode[] ModifierKeyCodes,
+        bool IsQuarantined,
+        string? QuarantineReason,
+        string? ReviewWarningText,
+        int CaptureLeft,
+        int CaptureTop,
+        int CaptureWidth,
+        int CaptureHeight,
+        double? EndScreenX,
+        double? EndScreenY,
+        MouseButton? DragButton,
+        TimeSpan? DragDuration,
+        MousePathPoint[] MousePath
+    );
 
     [StructLayout(LayoutKind.Sequential)]
     private struct NativePoint
@@ -4322,6 +4406,11 @@ public partial class MainWindow : Window
         KeyCode[] modifierKeyCodes
     )
     {
+        private readonly List<MousePathPoint> path =
+        [
+            new MousePathPoint(TimeSpan.Zero, startX, startY),
+        ];
+
         public long SessionId { get; } = sessionId;
 
         public TimeSpan Offset { get; } = offset;
@@ -4338,7 +4427,7 @@ public partial class MainWindow : Window
 
         public bool WasDragged { get; private set; }
 
-        public void MarkDragged(int x, int y)
+        public void MarkDragged(int x, int y, TimeSpan eventOffset)
         {
             if (
                 Math.Abs(x - StartX) >= 2
@@ -4347,6 +4436,58 @@ public partial class MainWindow : Window
             {
                 WasDragged = true;
             }
+
+            if (!WasDragged)
+            {
+                return;
+            }
+
+            AddPathPoint(x, y, eventOffset);
+        }
+
+        public void Complete(
+            int x,
+            int y,
+            TimeSpan eventOffset,
+            bool forceDrag
+        )
+        {
+            if (forceDrag || WasDragged || path.Count > 1)
+            {
+                AddPathPoint(x, y, eventOffset, force: true);
+            }
+        }
+
+        public MousePathPoint[] GetPath() => [.. path];
+
+        private void AddPathPoint(
+            int x,
+            int y,
+            TimeSpan eventOffset,
+            bool force = false
+        )
+        {
+            var last = path[^1];
+            var relativeOffset = eventOffset > Offset
+                ? eventOffset - Offset
+                : TimeSpan.Zero;
+            var distance = Math.Sqrt(
+                Math.Pow(x - last.X, 2) + Math.Pow(y - last.Y, 2)
+            );
+            if (!force && distance < 2)
+            {
+                return;
+            }
+            if (
+                last.X == x
+                && last.Y == y
+                && relativeOffset <= last.Offset
+            )
+            {
+                return;
+            }
+
+            path.Add(new MousePathPoint(relativeOffset, x, y));
         }
     }
 

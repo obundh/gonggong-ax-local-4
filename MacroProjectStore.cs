@@ -17,7 +17,8 @@ public enum MacroProjectStatus
 
 public static class MacroProjectStore
 {
-    public const int CurrentVersion = 1;
+    public const int CurrentVersion = 2;
+    private const int OldestSupportedVersion = 1;
     public const string SidecarSuffix = ".series4.json";
 
     private const string ApplicationFolderName = "공공AX 업무 매크로";
@@ -325,7 +326,7 @@ public static class MacroProjectStore
             statePath,
             cancellationToken
         );
-        if (state.Version != CurrentVersion)
+        if (!IsSupportedVersion(state.Version))
         {
             throw new InvalidDataException(
                 $"지원하지 않는 최근 프로젝트 상태 버전입니다: {state.Version}"
@@ -372,7 +373,7 @@ public static class MacroProjectStore
 
     private static void ValidateDocument(MacroProjectDocumentDto document)
     {
-        if (document.Version != CurrentVersion)
+        if (!IsSupportedVersion(document.Version))
         {
             throw new InvalidDataException(
                 $"지원하지 않는 매크로 프로젝트 버전입니다: {document.Version}"
@@ -393,6 +394,9 @@ public static class MacroProjectStore
             );
         }
     }
+
+    private static bool IsSupportedVersion(int version) =>
+        version is >= OldestSupportedVersion and <= CurrentVersion;
 
     private static string ResolveVideoPath(
         string normalizedSidecarPath,
@@ -566,6 +570,18 @@ public static class MacroProjectStore
             Sequence = recordedEvent.Sequence,
             ScreenX = recordedEvent.ScreenX,
             ScreenY = recordedEvent.ScreenY,
+            EndScreenX = recordedEvent.EndScreenX,
+            EndScreenY = recordedEvent.EndScreenY,
+            DragButton = recordedEvent.DragButton?.ToString(),
+            DragDurationTicks = recordedEvent.DragDuration?.Ticks,
+            MousePath = recordedEvent.MousePath
+                .Select(point => new MousePathPointDto
+                {
+                    OffsetTicks = point.Offset.Ticks,
+                    X = point.X,
+                    Y = point.Y,
+                })
+                .ToList(),
             CaptureLeft = recordedEvent.CaptureLeft,
             CaptureTop = recordedEvent.CaptureTop,
             CaptureWidth = recordedEvent.CaptureWidth,
@@ -618,6 +634,13 @@ public static class MacroProjectStore
             Sequence = dto.Sequence,
             ScreenX = dto.ScreenX,
             ScreenY = dto.ScreenY,
+            EndScreenX = dto.EndScreenX,
+            EndScreenY = dto.EndScreenY,
+            DragButton = ParseOptionalMouseButton(dto.DragButton),
+            DragDuration = dto.DragDurationTicks is long dragDurationTicks
+                ? TimeSpan.FromTicks(Math.Max(0, dragDurationTicks))
+                : null,
+            MousePath = ParseMousePath(dto.MousePath),
             CaptureLeft = dto.CaptureLeft,
             CaptureTop = dto.CaptureTop,
             CaptureWidth = dto.CaptureWidth,
@@ -653,6 +676,44 @@ public static class MacroProjectStore
             dto.ReviewWarningText
         );
         return recordedEvent;
+    }
+
+    private static MouseButton? ParseOptionalMouseButton(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        if (
+            Enum.TryParse<MouseButton>(value, ignoreCase: false, out var button)
+            && Enum.IsDefined(button)
+        )
+        {
+            return button;
+        }
+
+        throw new InvalidDataException($"알 수 없는 마우스 버튼입니다: {value}");
+    }
+
+    private static MousePathPoint[] ParseMousePath(
+        IReadOnlyList<MousePathPointDto>? points
+    )
+    {
+        if (points is null)
+        {
+            return [];
+        }
+
+        return points
+            .Where(point => point.OffsetTicks >= 0)
+            .OrderBy(point => point.OffsetTicks)
+            .Select(point => new MousePathPoint(
+                TimeSpan.FromTicks(point.OffsetTicks),
+                point.X,
+                point.Y
+            ))
+            .ToArray();
     }
 
     private static List<string> SerializeKeyCodes(
@@ -864,6 +925,16 @@ public sealed class RecordedEventDto
 
     public double? ScreenY { get; set; }
 
+    public double? EndScreenX { get; set; }
+
+    public double? EndScreenY { get; set; }
+
+    public string? DragButton { get; set; }
+
+    public long? DragDurationTicks { get; set; }
+
+    public List<MousePathPointDto>? MousePath { get; set; }
+
     public int CaptureLeft { get; set; }
 
     public int CaptureTop { get; set; }
@@ -871,6 +942,15 @@ public sealed class RecordedEventDto
     public int CaptureWidth { get; set; }
 
     public int CaptureHeight { get; set; }
+}
+
+public sealed class MousePathPointDto
+{
+    public long OffsetTicks { get; set; }
+
+    public int X { get; set; }
+
+    public int Y { get; set; }
 }
 
 public sealed class LastProjectStateDto

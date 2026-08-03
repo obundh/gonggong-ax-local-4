@@ -197,6 +197,16 @@ public sealed class RecordedEvent : INotifyPropertyChanged
 
     public double? ScreenY { get; set; }
 
+    public double? EndScreenX { get; set; }
+
+    public double? EndScreenY { get; set; }
+
+    public MouseButton? DragButton { get; set; }
+
+    public TimeSpan? DragDuration { get; set; }
+
+    public MousePathPoint[] MousePath { get; set; } = [];
+
     public int CaptureLeft { get; set; }
 
     public int CaptureTop { get; set; }
@@ -223,3 +233,5 @@ public sealed class RecordedEvent : INotifyPropertyChanged
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
     }
 }
+
+public sealed record MousePathPoint(TimeSpan Offset, int X, int Y);

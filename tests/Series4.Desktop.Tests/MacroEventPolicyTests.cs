@@ -136,6 +136,36 @@ public sealed class MacroEventPolicyTests
         Assert.Contains("긴급 중지", reason);
     }
 
+    [Fact]
+    public void CapturedMouseDrag_IsExecutable()
+    {
+        var recordedEvent = CreateEvent(MacroActionKind.MouseDrag);
+        recordedEvent.ScreenX = 100;
+        recordedEvent.ScreenY = 200;
+        recordedEvent.EndScreenX = 300;
+        recordedEvent.EndScreenY = 260;
+        recordedEvent.DragButton = MouseButton.Button1;
+        recordedEvent.MousePath =
+        [
+            new MousePathPoint(TimeSpan.Zero, 100, 200),
+            new MousePathPoint(TimeSpan.FromMilliseconds(80), 300, 260),
+        ];
+
+        Assert.Null(MacroEventPolicy.GetTechnicalBlockReason(recordedEvent));
+        Assert.True(recordedEvent.IsExecutable);
+    }
+
+    [Fact]
+    public void MouseDragWithoutPath_IsTechnicalBlock()
+    {
+        var recordedEvent = CreateEvent(MacroActionKind.MouseDrag);
+        recordedEvent.DragButton = MouseButton.Button1;
+
+        var reason = MacroEventPolicy.GetTechnicalBlockReason(recordedEvent);
+
+        Assert.Contains("경로", reason);
+    }
+
     [Theory]
     [InlineData("영상 길이 10.000초 밖의 이벤트입니다.")]
     [InlineData("녹화가 정상 완료되지 않아 자동 실행에서 제외했습니다.")]

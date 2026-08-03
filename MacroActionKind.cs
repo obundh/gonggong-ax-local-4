@@ -8,5 +8,6 @@ public enum MacroActionKind
     MouseLeftClick,
     MouseRightClick,
     MouseMiddleClick,
+    MouseDrag,
     MouseWheel,
 }
