@@ -16,7 +16,7 @@ Windows에서 평소 하던 업무를 한 번 시연하고 그대로 다시 실�
 | --- | --- |
 | ![1장 업무 매크로 소개](docs/assets/series4-comic/v3/01-intro.png) | ![2장 기록 방법](docs/assets/series4-comic/v3/02-record.png) |
 | 3. 영상과 이벤트 확인 | 4. 기록한 동작 실행 |
-| ![3장 이벤트 확인과 편집](docs/assets/series4-comic/v3/03-review.png) | ![4장 매크로 실행] |
+| ![3장 이벤트 확인과 편집](docs/assets/series4-comic/v3/03-review.png) | ![4장 매크로 실행](docs/assets/series4-comic/v3/04-run.png) |
 
 ![5장 설치와 실행 환경 맞추기](docs/assets/series4-comic/v3/05-test-download.png)
 
