@@ -17,7 +17,7 @@ npm run build
 npm run desktop
 ```
 
-빌드 이후에는 `실행.cmd`로 실행. 새 Electron 설치파일은 아직 배포하지 않습니다.
+빌드 이후에는 `실행.cmd`로 실행. 일반 사용자는 저장소 README의 v4.2.0 설치파일을 사용하세요.
 `npm run dev`는 루프백 브라우저 미리보기이며 전역 입력 기록·재생을 지원하지 않습니다.
 최초 의존성 다운로드 이후 앱 동작에는 외부 AI 서비스가 필요하지 않습니다.
 
@@ -47,6 +47,10 @@ npm run desktop
 현재 개발 앱과 동시에 실행하지 마세요.
 
 ## 배포 범위
+
+통합 패키지: 저장소 루트에서 `scripts/build-electron-release.ps1`.
+설치·압축해제 검증: `scripts/test-electron-release.ps1`.
+`rcedit`는 EXE 버전 정보를 설정하는 빌드 전용 도구이며 배포물에는 포함하지 않습니다.
 
 이 폴더는 프로그램 소스와 글꼴 라이선스를 포함합니다.
 `node_modules/`, `dist/`, `output/`, 업무 녹화·실행 로그는 저장소에 포함하지 않습니다.

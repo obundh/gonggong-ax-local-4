@@ -11,7 +11,7 @@
     <PlatformTarget>x64</PlatformTarget>
     <AssemblyName>공공AX-업무매크로</AssemblyName>
     <RootNamespace>Series4.Desktop</RootNamespace>
-    <Version>4.1.1</Version>
+    <Version>4.2.0</Version>
     <Authors>Public AX Local contributors</Authors>
     <Description>화면과 입력 이벤트를 기록하고 바로 재생하는 간단한 Windows 로컬 업무 매크로</Description>
     <RepositoryUrl>https://github.com/obundh/gonggong-ax-local-4</RepositoryUrl>

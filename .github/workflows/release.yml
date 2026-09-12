@@ -24,6 +24,11 @@ jobs:
         with:
           dotnet-version: 10.0.302
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
       - name: Restore locked dependencies
         run: dotnet restore .\tests\Series4.Desktop.Tests\Series4.Desktop.Tests.csproj --locked-mode
 
@@ -81,10 +86,9 @@ jobs:
       - name: Build self-contained installer and portable package
         shell: pwsh
         run: |
-          .\scripts\build-release.ps1 `
+          .\scripts\build-electron-release.ps1 `
             -DotNetPath (Get-Command dotnet).Source `
-            -InnoCompiler $env:ISCC_PATH `
-            -NoRestore
+            -InnoCompiler $env:ISCC_PATH
 
       - name: Verify release checksums
         shell: pwsh
@@ -107,97 +111,8 @@ jobs:
       - name: Smoke test portable and installer packages
         shell: pwsh
         run: |
-          $ErrorActionPreference = "Stop"
-          [xml]$project = Get-Content .\Series4.Desktop.csproj -Encoding UTF8
-          $version = [string]($project.Project.PropertyGroup.Version | Select-Object -First 1)
-          $smokeRoot = Join-Path $env:RUNNER_TEMP "공공 AX smoke"
-          $portableRoot = Join-Path $smokeRoot "portable"
-          $installDir = Join-Path $smokeRoot "설치 경로"
-          New-Item -ItemType Directory -Path $smokeRoot -Force | Out-Null
-
-          function Find-AppExecutable([string]$Root) {
-            $runtimeConfigs = @(Get-ChildItem -LiteralPath $Root -Recurse -Filter "*.runtimeconfig.json" -File)
-            if ($runtimeConfigs.Count -ne 1) {
-              throw "Expected exactly one application runtimeconfig under $Root; found $($runtimeConfigs.Count)."
-            }
-            $assemblyName = $runtimeConfigs[0].Name -replace '\.runtimeconfig\.json$', ''
-            $executable = Join-Path $runtimeConfigs[0].DirectoryName "$assemblyName.exe"
-            if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) {
-              throw "Application executable matching the runtimeconfig was not found: $executable"
-            }
-            return Get-Item -LiteralPath $executable
-          }
-
-          function Assert-AppStarts([string]$Executable) {
-            $process = Start-Process -FilePath $Executable -WorkingDirectory (Split-Path $Executable) -PassThru
-            $windowDeadline = [DateTime]::UtcNow.AddSeconds(30)
-            do {
-              if ($process.HasExited) {
-                throw "Application exited during startup smoke test with code $($process.ExitCode): $Executable"
-              }
-              $process.Refresh()
-              if ($process.MainWindowHandle -ne [IntPtr]::Zero) {
-                break
-              }
-              Start-Sleep -Milliseconds 500
-            } while ([DateTime]::UtcNow -lt $windowDeadline)
-
-            if ($process.MainWindowHandle -eq [IntPtr]::Zero) {
-              Stop-Process -Id $process.Id -Force
-              throw "Application did not expose a main window within 30 seconds: $Executable"
-            }
-            if (-not $process.CloseMainWindow()) {
-              Stop-Process -Id $process.Id -Force
-              throw "Application did not expose a closable main window: $Executable"
-            }
-            if (-not $process.WaitForExit(15000)) {
-              Stop-Process -Id $process.Id -Force
-              throw "Application did not close during smoke test: $Executable"
-            }
-            if ($process.ExitCode -ne 0) {
-              throw "Application exited with code $($process.ExitCode) after CloseMainWindow: $Executable"
-            }
-          }
-
-          $portableZip = Resolve-Path ".\artifacts\release\GonggongAX-Series4-Portable-x64-v$version.zip"
-          [System.IO.Compression.ZipFile]::ExtractToDirectory(
-            $portableZip.Path,
-            $portableRoot
-          )
-          $portableExe = Find-AppExecutable $portableRoot
-          Assert-AppStarts $portableExe.FullName
-
-          $setup = Resolve-Path ".\artifacts\release\GonggongAX-Series4-Setup-x64-v$version.exe"
-          $setupProcess = Start-Process -FilePath $setup -ArgumentList @(
-            "/VERYSILENT",
-            "/SUPPRESSMSGBOXES",
-            "/NORESTART",
-            "/CURRENTUSER",
-            "/NOICONS",
-            "/DIR=`"$installDir`""
-          ) -Wait -PassThru
-          if ($setupProcess.ExitCode -ne 0) {
-            throw "Silent installer smoke test failed with code $($setupProcess.ExitCode)."
-          }
-
-          $installedExe = Find-AppExecutable $installDir
-          Assert-AppStarts $installedExe.FullName
-
-          $uninstaller = Get-ChildItem $installDir -Filter "unins*.exe" -File | Select-Object -First 1
-          if ($null -eq $uninstaller) {
-            throw "Uninstaller was not created."
-          }
-          $uninstallProcess = Start-Process -FilePath $uninstaller.FullName -ArgumentList @(
-            "/VERYSILENT",
-            "/SUPPRESSMSGBOXES",
-            "/NORESTART"
-          ) -Wait -PassThru
-          if ($uninstallProcess.ExitCode -ne 0) {
-            throw "Silent uninstall smoke test failed with code $($uninstallProcess.ExitCode)."
-          }
-          if (Test-Path -LiteralPath $installDir) {
-            throw "Silent uninstall left the application directory behind: $installDir"
-          }
+          [xml]$project = Get-Content .\Series4.Desktop.csproj
+          .\scripts\test-electron-release.ps1 -Version ([string]$project.Project.PropertyGroup.Version)
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v7
@@ -211,7 +126,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         shell: pwsh
         run: |
-          $notes = Get-Content .\docs\RELEASE_NOTES.md -Raw -Encoding UTF8
+          $notes = Get-Content .\docs\RELEASE_4.2.0.md -Raw -Encoding UTF8
           $checksums = Get-Content .\artifacts\release\SHA256SUMS.txt -Raw -Encoding ASCII
           $body = @(
             $notes,
@@ -240,7 +155,8 @@ jobs:
           $existingDraft = gh release view $tag --json isDraft --jq '.isDraft' 2>$null
           if ($LASTEXITCODE -eq 0) {
             if ($existingDraft -ne "true") {
-              throw "Release $tag is already public; refusing to replace its assets."
+              Write-Host "Release $tag is already public; leaving verified assets unchanged."
+              exit 0
             }
             $existingAssetNames = @(gh release view $tag --json assets --jq '.assets[].name')
             if ($LASTEXITCODE -ne 0) { throw "Draft release asset listing failed." }

@@ -4,6 +4,23 @@ Windows에서 화면 영상과 마우스·키보드 동작을 함께 기록하�
 
 ## Electron 스튜디오
 
+### 다운로드 · v4.2.0
+
+| 파일 | GitLab | GitHub |
+| --- | --- | --- |
+| 설치 EXE | [설치파일](https://gitlab.aigov.go.kr/tyui22/gonggong-ax-local-4/-/releases/v4.2.0/downloads/setup.exe) | [설치파일](https://github.com/obundh/gonggong-ax-local-4/releases/download/v4.2.0/GonggongAX-Series4-Setup-x64-v4.2.0.exe) |
+| 포터블 ZIP | [압축파일](https://gitlab.aigov.go.kr/tyui22/gonggong-ax-local-4/-/releases/v4.2.0/downloads/portable.zip) | [압축파일](https://github.com/obundh/gonggong-ax-local-4/releases/download/v4.2.0/GonggongAX-Series4-Portable-x64-v4.2.0.zip) |
+| 소개 만화 | [2장 다운로드](https://gitlab.aigov.go.kr/tyui22/gonggong-ax-local-4/-/releases/v4.2.0/downloads/intro.zip) | [2장 다운로드](https://github.com/obundh/gonggong-ax-local-4/releases/download/v4.2.0/GonggongAX-Series4-Intro-v4.2.0.zip) |
+| SHA-256 | [체크섬](https://gitlab.aigov.go.kr/tyui22/gonggong-ax-local-4/-/releases/v4.2.0/downloads/SHA256SUMS.txt) | [체크섬](https://github.com/obundh/gonggong-ax-local-4/releases/download/v4.2.0/SHA256SUMS.txt) |
+
+설치판은 EXE 실행, 포터블은 **전체 압축 해제 후 `공공AX-업무매크로.exe` 실행**.
+Electron·.NET 런타임 포함으로 Node.js·npm·.NET SDK 설치가 필요하지 않습니다.
+설치 전 기존 앱을 종료하세요. 기존 비디오 폴더의 업무 기록은 보존합니다.
+코드 서명 미적용으로 SmartScreen 안내가 나타날 수 있습니다.
+포터블은 Visual C++ x64 Runtime이 필요하며, 설치판은 없을 때만 공식 다운로드·설치를 진행합니다.
+
+### 기능
+
 - 스튜디오: 영상 플레이어와 행동 로그 나란히 확인
 - 컴팩트: 메신저 크기의 창, 스튜디오와 같은 작업 공유
 - 모드 전환 시 창 크기 자동 조절 · IBM Plex 글꼴
@@ -27,7 +44,7 @@ Windows에서 화면 영상과 마우스·키보드 동작을 함께 기록하�
 
 ## 개발 실행
 
-새 Electron 버전은 **소스 실행본**입니다. 기존 v4.1.1 설치파일에는 위 화면이 포함되지 않습니다.
+일반 사용자는 위 v4.2.0 설치파일을 사용하세요. 아래는 소스 개발용 절차입니다.
 브라우저에서는 영상 확인만 가능하며, 전역 입력 기록·재생은 Windows Electron 앱 전용입니다.
 
 준비: Windows x64, .NET SDK 10.0.302, Node.js 22.12 이상과 npm.
@@ -45,6 +62,9 @@ npm run desktop
 초기 SDK·패키지 설치에는 인터넷이 필요하며, 녹화·재실행 자체에는 외부 AI 서비스가 필요하지 않습니다.
 녹화 중 CPU·GPU·디스크 사용량이 늘어 PC가 느려질 수 있습니다.
 세부 기능·제약: [로컬 엔진](studio/NATIVE.md).
+
+<details>
+<summary>기존 WPF v4.1.1 안내</summary>
 
 ## 기존 WPF 배포판
 
@@ -70,7 +90,7 @@ npm run desktop
 
 ## 설치
 
-1. [최신 GitHub Release](https://github.com/obundh/gonggong-ax-local-4/releases/latest)를 엽니다.
+1. [기존 v4.1.1 Release](https://github.com/obundh/gonggong-ax-local-4/releases/tag/v4.1.1)를 엽니다.
 2. Assets에서 `GonggongAX-Series4-Setup-x64-v4.1.1.exe`를 받습니다.
 3. 설치 후 시작 메뉴에서 `공공 AX 업무 매크로`를 실행합니다.
 
@@ -193,3 +213,5 @@ Inno Setup 6과 Git이 있으면 다음 명령으로 설치 EXE, portable ZIP, �
 프로젝트는 [MIT 라이선스](LICENSE)로 제공합니다. 배포본에는
 ScreenRecorderLib·SharpHook·libuiohook·.NET 고지와 필요한 대응 소스가 포함됩니다.
 자세한 내용은 [제3자 소프트웨어 고지](THIRD_PARTY_NOTICES.md)에 있습니다.
+
+</details>

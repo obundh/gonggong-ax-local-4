@@ -3,11 +3,24 @@ param(
     [string]$Version,
     [string]$DotNetPath = "dotnet",
     [string]$InnoCompiler,
-    [switch]$NoRestore
+    [switch]$NoRestore,
+    [switch]$EngineOnly
 )
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
+
+# Preserve the public build command while making the integrated desktop the default.
+if (-not $EngineOnly) {
+    if ($Version) {
+        [xml]$versionProject = Get-Content (Join-Path $PSScriptRoot "..\Series4.Desktop.csproj")
+        if ($Version -ne [string]$versionProject.Project.PropertyGroup.Version) {
+            throw "Requested version does not match the project."
+        }
+    }
+    & (Join-Path $PSScriptRoot "build-electron-release.ps1") -DotNetPath $DotNetPath -InnoCompiler $InnoCompiler
+    return
+}
 
 if ($null -eq ("System.IO.Compression.ZipFile" -as [type])) {
     Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -359,6 +372,11 @@ if (Get-ChildItem -LiteralPath $publishDir -Filter "*.pdb" -File) {
 }
 if (Get-ChildItem -LiteralPath $publishDir -Filter "*Tests*" -File) {
     throw "Test binaries must not be present in the public package."
+}
+
+if ($EngineOnly) {
+    Write-Host "Native engine and licence payload ready: $publishDir"
+    return
 }
 
 $portableFolderName = "GonggongAX-Series4-Portable-x64-v$Version"

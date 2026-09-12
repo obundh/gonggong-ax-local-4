@@ -1,6 +1,9 @@
 # 오픈소스 구성요소
 
-공공 AX 업무 매크로 v4.1.1 Windows x64 배포물의 런타임 구성요소입니다.
+공공 AX 업무 매크로 v4.2.0 Windows x64 배포물의 런타임 구성요소입니다.
+Electron UI는 `resources/app/`, self-contained 기록 엔진은 `resources/engine/`에 있습니다.
+Electron/Chromium 고지는 `LICENSE`·`LICENSES.chromium.html`,
+npm 패키지 목록과 고지는 `licenses/npm-components.json`·`licenses/npm/`을 참조하세요.
 
 | 구성요소 | 버전 또는 커밋 | 라이선스 | 배포 파일 |
 |---|---|---|---|
@@ -9,7 +12,7 @@
 | libuiohook | `104624bfd3c69e558e56fd8aff11ea61bc24b224` | LGPL-3.0-or-later | `uiohook.dll` |
 | Microsoft .NET/Windows Desktop Runtime | runtimeconfig에 기록된 10.0.x | MIT 및 제3자 고지 | self-contained runtime 파일 |
 
-`uiohook.dll`은 EXE 옆에 있는 독립 네이티브 라이브러리입니다. ABI가 호환되는
+`uiohook.dll`은 `resources/engine/`의 엔진 EXE 옆에 있는 독립 네이티브 라이브러리입니다. ABI가 호환되는
 수정 빌드로 교체할 수 있으며 앱은 해시 검사로 교체를 막지 않습니다. 배포한
 바이너리와 정확히 대응하는 전체 소스는 다음 위치에 있습니다.
 

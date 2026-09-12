@@ -1,5 +1,5 @@
 #ifndef AppVersion
-  #define AppVersion "4.1.1"
+  #define AppVersion "4.2.0"
 #endif
 
 #ifndef SourceDir
@@ -40,9 +40,12 @@ Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern dynamic
 SetupLogging=yes
-CloseApplications=no
+CloseApplications=yes
 RestartApplications=no
 AppMutex=Local\GonggongAX.Series4.Desktop
+CreateUninstallRegKey=not IsSmokeTest
+UsePreviousAppDir=not IsSmokeTest
+UsePreviousGroup=not IsSmokeTest
 UninstallDisplayIcon={app}\{#AppExeName}
 AppReadmeFile={app}\README-FIRST.txt
 VersionInfoVersion={#AppVersion}
@@ -59,8 +62,8 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"
-Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"
+Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"; Check: not IsSmokeTest
+Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"; Check: not IsSmokeTest
 
 [Run]
 Filename: "{app}\{#AppExeName}"; Description: "{#AppName} 실행"; WorkingDir: "{app}"; Flags: nowait postinstall skipifsilent
@@ -69,6 +72,11 @@ Filename: "{app}\{#AppExeName}"; Description: "{#AppName} 실행"; WorkingDir: "
 const
   VcRuntimeUrl = 'https://aka.ms/vc14/vc_redist.x64.exe';
   VcRuntimeRegistryKey = 'SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64';
+
+function IsSmokeTest: Boolean;
+begin
+  Result := ExpandConstant('{param:AXSMOKETEST|0}') = '1';
+end;
 
 function IsVcRuntimeInstalled: Boolean;
 var
@@ -117,6 +125,11 @@ begin
   Result := '';
   if not IsVcRuntimeInstalled then
   begin
+    if IsSmokeTest then
+    begin
+      Result := 'Smoke test requires an existing Visual C++ runtime; machine changes are disabled.';
+      Exit;
+    end;
     Log('Microsoft Visual C++ x64 런타임이 없어 공식 설치 파일을 자동으로 준비합니다.');
     RedistPath := ExpandConstant('{tmp}\vc_redist.x64.exe');
     try
