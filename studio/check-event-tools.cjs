@@ -1,0 +1,26 @@
+const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
+let state;const bridge=require('./native-bridge.cjs')(s=>state=s);
+const delay=ms=>new Promise(r=>setTimeout(r,ms));
+const wait=async fn=>{const end=Date.now()+14000;while(!fn()){if(Date.now()>end)throw Error('timeout '+JSON.stringify(state));await delay(50);}};
+(async()=>{try{
+ await wait(()=>state?.phase==='idle');
+ const fixture=JSON.parse(fs.readFileSync(path.join(__dirname,'output/replay-fixture.series4.json'),'utf8'));fixture.events=[];
+ const project=path.join(__dirname,'output/wait-test.series4.json');fs.writeFileSync(project,JSON.stringify(fixture));
+ await bridge.command('open',{path:project});
+ await assert.rejects(bridge.command('add',{kind:'Wait',at:0,seconds:-1}));
+ await bridge.command('add',{kind:'Wait',at:0,seconds:1.2});
+ await bridge.command('add',{kind:'Wait',at:.4,seconds:1.2});
+ await wait(()=>state.events.length===2);
+ const t=Date.now();await bridge.command('run',{repeats:1});await wait(()=>state.busy);await wait(()=>!state.busy);
+ const elapsed=Date.now()-t;assert(elapsed>=5500&&elapsed<10000,'wait timing '+elapsed);
+ assert(state.events.every(e=>e.result==='실행 완료'));
+ await bridge.command('open',{path:project});await wait(()=>state.events.length===2);
+ assert.equal(state.events[0].kind,'Wait');assert.equal(state.events[0].text,'1.2');
+ await bridge.command('edit',{index:0,at:0,seconds:30});
+ await bridge.command('run',{repeats:1});await wait(()=>state.phase==='running');const stop=Date.now();await bridge.command('stop');await wait(()=>!state.busy);assert(Date.now()-stop<1500);
+ await bridge.command('add',{kind:'TextEntry',at:1,text:'테스트 입력'});
+ await bridge.command('add',{kind:'MouseRightClick',at:1.5,x:150,y:150});
+ await wait(()=>state.events.length===4);
+ assert.equal(state.events[3].kind,'MouseRightClick');assert.equal(state.events[3].captureWidth,1920);
+ console.log(JSON.stringify({ok:true,elapsed,stopMs:Date.now()-stop,actions:state.events.map(e=>e.kind)}));
+ }catch(error){console.error(error);process.exitCode=1;}finally{await bridge.command('stop').catch(()=>{});bridge.close();}})();

@@ -41,6 +41,8 @@ public static class MacroEventPolicy
 
         var invalidPayloadReason = recordedEvent.ActionKind switch
         {
+            MacroActionKind.Wait when !TryGetWaitSeconds(recordedEvent.ActionText, out _) =>
+                "대기 시간은 0.1~3600초여야 합니다.",
             MacroActionKind.TextEntry
                 when string.IsNullOrEmpty(recordedEvent.ActionText) =>
                 "입력할 텍스트가 비어 있습니다.",
@@ -188,6 +190,10 @@ public static class MacroEventPolicy
                 StringComparison.Ordinal
             ) == true;
     }
+
+    public static bool TryGetWaitSeconds(string? text, out double seconds) =>
+        double.TryParse(text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out seconds)
+        && double.IsFinite(seconds) && seconds >= 0.1 && seconds <= 3600;
 
     public static bool IsPointerAction(MacroActionKind actionKind)
     {

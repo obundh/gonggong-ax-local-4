@@ -17,7 +17,7 @@
     <RepositoryUrl>https://github.com/obundh/gonggong-ax-local-4</RepositoryUrl>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
-    <DefaultItemExcludes>$(DefaultItemExcludes);artifacts\**</DefaultItemExcludes>
+    <DefaultItemExcludes>$(DefaultItemExcludes);artifacts\**;studio\**</DefaultItemExcludes>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="ScreenRecorderLib" Version="6.6.0" />

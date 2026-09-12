@@ -1,0 +1,21 @@
+const assert=require('node:assert/strict');
+const fs=require('node:fs');
+let state;const phases=new Set();
+const bridge=require('./native-bridge.cjs')(s=>{state=s;phases.add(s.phase);});
+const wait=async(test,ms=15000)=>{const end=Date.now()+ms;while(!test()){if(Date.now()>end)throw Error('Timeout: '+JSON.stringify(state));await new Promise(r=>setTimeout(r,100));}};
+(async()=>{try{
+ await wait(()=>state?.phase==='idle');
+ await bridge.command('record');
+ await wait(()=>state?.phase==='recording');
+ await new Promise(r=>setTimeout(r,1800));
+ await bridge.command('stop');
+ await wait(()=>state?.phase==='idle'&&state?.videoPath);
+ await wait(()=>state.message.includes('저장'));
+ assert(fs.statSync(state.videoPath).size>0);
+ assert(fs.existsSync(state.videoPath+'.series4.json'));
+ const recorded=state.videoPath;
+ await bridge.command('open',{path:recorded});
+ await bridge.command('save');
+ console.log(JSON.stringify({ok:true,phases:[...phases],video:recorded,bytes:fs.statSync(recorded).size,events:state.events.length}));
+ bridge.close();
+ }catch(e){console.error(e);await bridge.command('stop').catch(()=>{});bridge.close();process.exitCode=1;}})();

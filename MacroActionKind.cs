@@ -10,4 +10,5 @@ public enum MacroActionKind
     MouseMiddleClick,
     MouseDrag,
     MouseWheel,
+    Wait,
 }

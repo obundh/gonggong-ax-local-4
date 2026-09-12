@@ -8,6 +8,15 @@ public partial class App : Application
 
     protected override void OnStartup(StartupEventArgs e)
     {
+        if (e.Args.Contains("--bridge"))
+        {
+            ShutdownMode = ShutdownMode.OnExplicitShutdown;
+            base.OnStartup(e);
+            var engine = new MainWindow();
+            MainWindow = engine;
+            engine.StartBridge(e.Args);
+            return;
+        }
         singleInstanceMutex = new Mutex(
             initiallyOwned: true,
             name: @"Local\GonggongAX.Series4.Desktop",
@@ -27,6 +36,7 @@ public partial class App : Application
             return;
         }
 
+        StartupUri = new Uri("MainWindow.xaml", UriKind.Relative);
         base.OnStartup(e);
     }
 

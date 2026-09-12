@@ -1476,6 +1476,11 @@ public partial class MainWindow : Window
 
     private async void RunMacroButton_Click(object sender, RoutedEventArgs e)
     {
+        await RunMacroAsync();
+    }
+
+    private async Task RunMacroAsync()
+    {
         if (
             isRecording
             || isFinalizing
@@ -1696,6 +1701,7 @@ public partial class MainWindow : Window
                     $"매크로 실행 중 · {index + 1}/{executableEvents.Count} · {recordedEvent.Message}";
                 try
                 {
+                    if (recordedEvent.ActionKind == MacroActionKind.Wait) clock.Stop();
                     await Task.Run(
                         () => ExecuteMacroEvent(
                             recordedEvent,
@@ -1725,6 +1731,10 @@ public partial class MainWindow : Window
                     recordedEvent.LastExecutionFailed = true;
                     recordedEvent.LastExecutionResult =
                         $"건너뜀 · {exception.Message}";
+                }
+                finally
+                {
+                    if (recordedEvent.ActionKind == MacroActionKind.Wait) clock.Start();
                 }
             }
 
@@ -1791,6 +1801,12 @@ public partial class MainWindow : Window
         ValidateMacroEventTarget(recordedEvent);
         switch (recordedEvent.ActionKind)
         {
+            case MacroActionKind.Wait:
+                if (!MacroEventPolicy.TryGetWaitSeconds(recordedEvent.ActionText, out var seconds))
+                    throw new InvalidOperationException("대기 시간은 0.1~3600초여야 합니다.");
+                if (cancellationToken.WaitHandle.WaitOne(TimeSpan.FromSeconds(seconds)))
+                    cancellationToken.ThrowIfCancellationRequested();
+                break;
             case MacroActionKind.TextEntry:
                 if (recordedEvent.ActionText is not { Length: > 0 } text)
                 {
@@ -3939,7 +3955,7 @@ public partial class MainWindow : Window
         window = GetRootWindow(window);
 
         _ = GetWindowThreadProcessId(window, out var processId);
-        return processId == (uint)Environment.ProcessId;
+        return processId == (uint)Environment.ProcessId || processId == BridgeParentPid;
     }
 
     private void UpdateVideoTimeText()
@@ -4222,6 +4238,7 @@ public partial class MainWindow : Window
 
     private void HandleEmergencyStop()
     {
+        bridgeRun?.Cancel();
         if (isMacroCountingDown)
         {
             CancelMacroCountdown();

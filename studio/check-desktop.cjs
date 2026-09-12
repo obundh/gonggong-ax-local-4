@@ -1,0 +1,24 @@
+const {app,BrowserWindow,ipcMain,dialog}=require('electron');
+const fs=require('node:fs');const path=require('node:path');
+require('./electron.cjs');
+const delay=ms=>new Promise(r=>setTimeout(r,ms));
+app.whenReady().then(async()=>{try{
+ while(!BrowserWindow.getAllWindows().length)await delay(100);
+ const win=BrowserWindow.getAllWindows()[0];await delay(2000);
+ await win.webContents.executeJavaScript("document.querySelector('.intro-bottom button')?.click()");
+ let state=await win.webContents.executeJavaScript('window.axShell.getState()');
+ if(state.phase!=='idle')throw Error(JSON.stringify(state));
+ const font=await win.webContents.executeJavaScript("getComputedStyle(document.body).fontFamily");
+ if(!font.includes('IBM Plex Sans KR'))throw Error(font);
+ dialog.showOpenDialog=async()=>({canceled:false,filePaths:[path.join(__dirname,'output/replay-fixture.series4.json')]});
+ await win.webContents.executeJavaScript("window.axShell.command('open')");
+ await delay(2000);
+ const media=await win.webContents.executeJavaScript("(()=>{const v=document.querySelector('.compact-workspace video');return {src:v?.currentSrc,ready:v?.readyState,error:v?.error?.message,width:document.documentElement.scrollWidth,viewport:innerWidth}})()");
+ if(media.ready<2||media.error)throw Error(JSON.stringify(media));
+ const compact=await win.capturePage();fs.writeFileSync(path.join(__dirname,'output/playwright/ibm-desktop-compact.png'),compact.toPNG());
+ await win.webContents.executeJavaScript("document.querySelector('.mode-switch button').click()");await delay(500);
+ const bounds=win.getBounds();if(bounds.width<1000)throw Error(JSON.stringify(bounds));
+ const studio=await win.capturePage();fs.writeFileSync(path.join(__dirname,'output/playwright/ibm-desktop-studio.png'),studio.toPNG());
+ console.log(JSON.stringify({ok:true,font,media,bounds}));
+ win.close();
+ }catch(error){console.error(error);process.exitCode=1;BrowserWindow.getAllWindows().forEach(w=>w.close());}});

@@ -6,6 +6,12 @@
 
 ## Release에 동봉하는 고지와 소스
 
+Electron 개발 소스는 `studio/`에 별도로 포함합니다. React·React DOM·Three.js·Electron은 MIT,
+lucide-react는 ISC, IBM Plex 글꼴은 OFL-1.1입니다. 패키지 버전은
+`studio/package-lock.json`, 글꼴 전문은 `studio/public/licenses/`를 참조하세요.
+현재 새 Electron 바이너리 설치파일은 배포하지 않습니다. 향후 바이너리 배포 시에는
+Electron/Chromium 및 포함 패키지의 라이선스·제3자 고지도 함께 동봉해야 합니다.
+
 각 바이너리 배포물에는 다음 항목이 들어갑니다.
 
 - 프로젝트 `LICENSE.txt`와 이 `THIRD_PARTY_NOTICES.md`
